@@ -1,0 +1,9 @@
+PyQt6>=6.10.2
+pyqtgraph>=0.13.0
+numpy>=1.26.0
+pandas>=2.0.0
+pyarrow>=14.0.0
+dukascopy-python>=0.1.0
+tabdock>=0.1.10
+qt-themes>=0.4.0
+qtpy>=2.4.0

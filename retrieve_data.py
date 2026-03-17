@@ -134,10 +134,9 @@ def rename_parquet_file(old_name: str, new_name: str) -> bool:
     return False
 
 
-def read_parquet_preview(filename: str, max_rows: int = 100):
+def read_parquet_preview(filename: str):
     import pandas as pd
     filepath = DATA_DIR / filename
     if not filepath.exists():
         return None
-    df = pd.read_parquet(filepath)
-    return df.head(max_rows)
+    return pd.read_parquet(filepath)

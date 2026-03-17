@@ -1,9 +1,12 @@
 from datetime import datetime, timedelta
-from PyQt6.QtWidgets import (QTableWidget, QTableWidgetItem, QInputDialog,
-                              QWidget, QHBoxLayout, QPushButton, QLineEdit)
-from PyQt6.QtCore import Qt, QFileSystemWatcher
+from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLineEdit
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QKeyEvent
 from tabdock import Panel
+from retrieve_data import (
+    INTERVALS, OFFER_SIDES, CATEGORIES,
+    get_instruments_for_category, resolve_ticker, fetch_data,
+)
 
 
 class TickerInput(QWidget):
@@ -45,7 +48,7 @@ class TickerInput(QWidget):
                     padding: 0px;
                     font-size: 13px;
                     font-weight: bold;
-                    font-family: monospace;
+                    font-family: "Menlo";
                 }}
                 QLineEdit:focus {{
                     border: 1px solid {accent};
@@ -127,21 +130,11 @@ class TickerInput(QWidget):
                     self._cells[idx + 1].setCursorPosition(0)
                 return True
         return super().eventFilter(obj, event)
-from tabdock.panel_state import PanelStateManager
-from retrieve_data import (
-    INTERVALS, OFFER_SIDES, CATEGORIES, DATA_DIR,
-    get_instruments_for_category, resolve_ticker, fetch_data,
-    list_parquet_files, read_parquet_preview,
-    delete_parquet_file, rename_parquet_file,
-)
 
 
-class RetrievePanel(Panel):
+class Retrieve(Panel):
     def __init__(self, parent, docked, x, y, w, h, **kw):
         super().__init__(parent, docked, x, y, w, h, **kw)
-
-        self.add_section_label("Retrieve Market Data")
-        self.add_separator()
 
         self.add_label("Mode")
         self.next_row()
@@ -277,7 +270,7 @@ class RetrievePanel(Panel):
         self.next_row()
         self._status = self.add_label("")
         self.next_row()
-        self.add_button("Fetch & Save", callback=self._on_fetch)
+        self.add_button("Fetch", callback=self._on_fetch)
 
         self._apply_mode("Ticker")
 
@@ -391,303 +384,3 @@ class RetrievePanel(Panel):
             self._status.setText(f"Saved: {path.split('/')[-1]}")
         except Exception as e:
             self._status.setText(f"Error: {e}")
-
-
-class FileListPanel(Panel):
-    def __init__(self, parent, docked, x, y, w, h, **kw):
-        super().__init__(parent, docked, x, y, w, h, **kw)
-
-        self.add_section_label("Saved Files")
-
-        self.next_row()
-        self.add_button("Rename", callback=self._on_rename)
-        self.add_button("Delete", callback=self._on_delete)
-
-        self.next_row()
-        self._file_list = self.add_list(
-            list_parquet_files(),
-            list_key="preview_selected_file",
-            callback=self._on_file_selected,
-        )
-
-        self._watcher = QFileSystemWatcher()
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        self._watcher.addPath(str(DATA_DIR))
-        self._watcher.directoryChanged.connect(self._refresh_files)
-
-    def _refresh_files(self):
-        files = list_parquet_files()
-        current_sel = self.state.get("preview_selected_file", [])
-        self._file_list.clear()
-        self._file_list.addItems(files)
-        for i in range(self._file_list.count()):
-            if self._file_list.item(i).text() in current_sel:
-                self._file_list.item(i).setSelected(True)
-
-    def _on_file_selected(self, selected):
-        pass
-
-    def _on_delete(self):
-        selected = self.state.get("preview_selected_file", [])
-        if not selected:
-            return
-        for f in selected:
-            delete_parquet_file(f)
-        self.state.set("preview_selected_file", [])
-        self._refresh_files()
-
-    def _on_rename(self):
-        selected = self.state.get("preview_selected_file", [])
-        if not selected:
-            return
-        old_name = selected[0]
-        new_name, ok = QInputDialog.getText(self, "Rename", "New name:", text=old_name)
-        if ok and new_name and new_name != old_name:
-            if rename_parquet_file(old_name, new_name):
-                if not new_name.endswith(".parquet"):
-                    new_name += ".parquet"
-                self.state.set("preview_selected_file", [new_name])
-                self._refresh_files()
-
-
-class PreviewPanel(Panel):
-    def __init__(self, parent, docked, x, y, w, h, **kw):
-        super().__init__(parent, docked, x, y, w, h, **kw)
-
-        self.add_label("View")
-        self._mode_dropdown = self.add_dropdown(
-            ["Table", "Chart"],
-            callback=self._on_mode_changed,
-            string_key="preview_mode",
-            default="Table",
-        )
-
-        self.next_row()
-
-        self._table = QTableWidget(self)
-        self._table.setStyleSheet(f"""
-            QTableWidget {{
-                background-color: {self.widget_bg};
-                color: {self.text_color};
-                border: none;
-                gridline-color: {self.panel_bg};
-                font-size: 11px;
-            }}
-            QHeaderView::section {{
-                background-color: {self.panel_bg};
-                color: {self.text_color};
-                border: none;
-                padding: 4px;
-                font-size: 11px;
-                font-weight: bold;
-            }}
-            QTableWidget::item {{
-                padding: 2px 6px;
-            }}
-            QScrollBar:vertical {{
-                background: {self.panel_bg};
-                width: 8px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: {self.widget_bg};
-                border-radius: 4px;
-                min-height: 20px;
-            }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                height: 0px;
-            }}
-            QScrollBar:horizontal {{
-                background: {self.panel_bg};
-                height: 8px;
-            }}
-            QScrollBar::handle:horizontal {{
-                background: {self.widget_bg};
-                border-radius: 4px;
-                min-width: 20px;
-            }}
-            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
-                width: 0px;
-            }}
-        """)
-        self._table.horizontalHeader().setStretchLastSection(True)
-        self._table.verticalHeader().setVisible(False)
-        self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._root_layout.addWidget(self._table, 1)
-
-        import pyqtgraph as pg
-        pg.setConfigOptions(background=self.panel_bg, foreground=self.text_color, antialias=True)
-
-        self._chart_container = QWidget(self)
-        chart_layout = QHBoxLayout(self._chart_container)
-        chart_layout.setContentsMargins(0, 0, 0, 0)
-        chart_layout.setSpacing(0)
-
-        self._chart = pg.PlotWidget()
-        self._chart.setStyleSheet(f"background-color: {self.panel_bg}; border: none;")
-        self._chart.showGrid(x=True, y=True, alpha=0.15)
-        self._chart.setLabel("left", "Close")
-
-        btn_style = f"""
-            QPushButton {{
-                background-color: {self.widget_bg}; color: {self.text_color};
-                border: none; padding: 4px 6px; font-size: 11px; border-radius: 3px;
-            }}
-            QPushButton:hover {{ background-color: {self.accent_color}; }}
-            QPushButton:checked {{ background-color: {self.accent_color}; }}
-        """
-        from PyQt6.QtWidgets import QVBoxLayout
-        toolbar = QWidget()
-        toolbar.setFixedWidth(32)
-        toolbar.setStyleSheet(f"background-color: {self.panel_bg};")
-        tb_layout = QVBoxLayout(toolbar)
-        tb_layout.setContentsMargins(2, 4, 2, 4)
-        tb_layout.setSpacing(4)
-
-        self._btn_home = QPushButton("⌂")
-        self._btn_home.setStyleSheet(btn_style)
-        self._btn_home.setToolTip("Reset view")
-        self._btn_home.clicked.connect(lambda: self._chart.autoRange())
-
-        self._btn_pan = QPushButton("✋")
-        self._btn_pan.setStyleSheet(btn_style)
-        self._btn_pan.setCheckable(True)
-        self._btn_pan.setChecked(True)
-        self._btn_pan.setToolTip("Pan")
-        self._btn_pan.clicked.connect(lambda: self._set_chart_mode("pan"))
-
-        self._btn_zoom = QPushButton("🔍")
-        self._btn_zoom.setStyleSheet(btn_style)
-        self._btn_zoom.setCheckable(True)
-        self._btn_zoom.setToolTip("Zoom to rect")
-        self._btn_zoom.clicked.connect(lambda: self._set_chart_mode("zoom"))
-
-        for btn in [self._btn_home, self._btn_pan, self._btn_zoom]:
-            tb_layout.addWidget(btn)
-        tb_layout.addStretch()
-
-        chart_layout.addWidget(self._chart, 1)
-        chart_layout.addWidget(toolbar)
-        self._root_layout.addWidget(self._chart_container, 1)
-        self._has_dates = False
-
-        self._current_df = None
-        self._file_state = PanelStateManager.for_class(FileListPanel)
-        self._file_state.subscribe("preview_selected_file", self._on_selection_changed)
-        self._apply_mode("Table")
-
-    def _set_chart_mode(self, mode):
-        vb = self._chart.getViewBox()
-        if mode == "pan":
-            vb.setMouseMode(vb.PanMode)
-            self._btn_pan.setChecked(True)
-            self._btn_zoom.setChecked(False)
-        else:
-            vb.setMouseMode(vb.RectMode)
-            self._btn_pan.setChecked(False)
-            self._btn_zoom.setChecked(True)
-
-    def _apply_mode(self, mode):
-        self._table.setVisible(mode == "Table")
-        self._chart_container.setVisible(mode == "Chart")
-
-    def _on_mode_changed(self, mode):
-        self._apply_mode(mode)
-        self._render()
-
-    def _on_selection_changed(self, selected):
-        if not selected:
-            self._current_df = None
-            self._table.setRowCount(0)
-            self._table.setColumnCount(0)
-            self._chart.clear()
-            self._chart.setTitle("")
-            return
-
-        df = read_parquet_preview(selected[0], max_rows=200)
-        self._current_df = df
-        self._render()
-
-    def _render(self):
-        mode = self.state.get("preview_mode", "Table")
-        if mode == "Table":
-            self._render_table()
-        else:
-            self._render_chart()
-
-    def _render_table(self):
-        df = self._current_df
-        if df is None:
-            self._table.setRowCount(0)
-            self._table.setColumnCount(0)
-            return
-
-        self._table.setRowCount(len(df))
-        self._table.setColumnCount(len(df.columns))
-        self._table.setHorizontalHeaderLabels(list(df.columns))
-
-        for r, (_, row) in enumerate(df.iterrows()):
-            for c, val in enumerate(row):
-                item = QTableWidgetItem(str(val))
-                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                self._table.setItem(r, c, item)
-
-        self._table.resizeColumnsToContents()
-
-    def _render_chart(self):
-        self._chart.clear()
-        self._chart.setTitle("")
-        df = self._current_df
-        if df is None:
-            return
-
-        close_col = None
-        for col in df.columns:
-            if col.lower() == "close":
-                close_col = col
-                break
-        if close_col is None:
-            for col in df.columns:
-                if "close" in col.lower():
-                    close_col = col
-                    break
-        if close_col is None:
-            self._chart.setTitle("No 'close' column found", color=self.text_color, size="10pt")
-            return
-
-        time_col = None
-        for col in df.columns:
-            if col.lower() in ("timestamp", "time", "date", "datetime"):
-                time_col = col
-                break
-
-        import numpy as np
-        import pyqtgraph as pg
-        y = df[close_col].values.astype(float)
-        has_dates = time_col is not None
-
-        if has_dates:
-            import pandas as pd
-            x = pd.to_datetime(df[time_col]).astype(np.int64) / 1e9
-        else:
-            x = np.arange(len(y), dtype=float)
-
-        if has_dates != self._has_dates:
-            self._has_dates = has_dates
-            old_chart = self._chart
-            layout = self._chart_container.layout()
-            layout.removeWidget(old_chart)
-            old_chart.deleteLater()
-            if has_dates:
-                axis = pg.DateAxisItem(orientation="bottom")
-                self._chart = pg.PlotWidget(axisItems={"bottom": axis})
-            else:
-                self._chart = pg.PlotWidget()
-            self._chart.setStyleSheet(f"background-color: {self.panel_bg}; border: none;")
-            self._chart.showGrid(x=True, y=True, alpha=0.15)
-            layout.insertWidget(0, self._chart, 1)
-
-        pen = pg.mkPen(color=self.accent_color, width=1.5)
-        self._chart.plot(x, y, pen=pen)
-        self._chart.setLabel("left", "Close")
-        if has_dates:
-            self._chart.setLabel("bottom", "Date")
