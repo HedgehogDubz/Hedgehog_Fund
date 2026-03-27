@@ -22,12 +22,13 @@ class MainUI(QMainWindow):
         self.setCentralWidget(self.tab_dock)
 
         retrieve_tab = RetrieveTab(self.tab_dock)
-        analyze_tab = AnalyzeTab(self.tab_dock)
         create_tab = CreateTab(self.tab_dock)
+        analyze_tab = AnalyzeTab(self.tab_dock)
 
         self.tab_dock.add_tab(retrieve_tab)
-        self.tab_dock.add_tab(analyze_tab)
         self.tab_dock.add_tab(create_tab)
+        self.tab_dock.add_tab(analyze_tab)
+
         self.tab_dock.connector_manager._enable_tracking_on_children()
 
         self.show()

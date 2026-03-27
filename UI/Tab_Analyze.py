@@ -1,15 +1,15 @@
-from tabdock.tabs import StandardTab
+from tabdock.tabs import QuadTab
+from UI.Panel_DataFileList import DataFileList
+from UI.Panel_ChartPreview import ChartPreview
 
 
 def AnalyzeTab(TabDock):
-    analyze_tab = StandardTab(
-        TabDock, "Analyze", 1,
-        left_panels=[],
-        bottom_panels=[],
-        center_panels=[],
-        right_panels=[],
-        left_ratio=0.25,
-        bottom_ratio=0.25,
-        right_ratio=0.25
+    analyze_tab = QuadTab(
+        TabDock, "Analyze", 2,
+        top_left_panels=[DataFileList],
+        top_right_panels=[],
+        bottom_left_panels=[],
+        bottom_right_panels=[],
+        h_split=0.5, v_split=0.5
     )
     return analyze_tab

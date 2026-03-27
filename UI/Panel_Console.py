@@ -11,7 +11,7 @@ class Console(Panel):
         self._root_layout.setAlignment(Qt.AlignmentFlag(0))
         self._root_layout.setSpacing(0)
 
-        self.label_console = self.add_label("test", state_key="console_text")
+        self.label_console = self.add_label("", state_key="console_text")
         self.label_console.setStyleSheet(f"background-color: {self.widget_bg};")
         self.label_console.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.label_console.setAlignment(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft)
@@ -25,5 +25,12 @@ class Console(Panel):
         self.label_text_indicator.setStyleSheet(f"background-color: {self.widget_bg};")
         self.line_edit = self.add_text_input()
         self.line_edit.setStyleSheet(f"background-color: {self.widget_bg};")
-        
-        
+        self.line_edit.returnPressed.connect(self._on_enter_pressed)
+
+    def _on_enter_pressed(self):
+        text = self.line_edit.text()
+        self.write(f"{text}\n")
+        self.line_edit.clear()
+
+    def write(self, text):
+        self.label_console.setText(self.label_console.text() + text)
