@@ -5,7 +5,7 @@ from PyQt6.QtGui import QIcon, QPixmap, QColor, QPainter
 from tabdock import Panel
 from tabdock.panel_state import PanelStateManager
 from retrieve_data import read_parquet_preview
-from UI.Panel_DataFileList import DataFileList
+from UI.Panel_AnalyzeDataFileList import AnalyzeDataFileList
 
 _ICON_DIR = Path(__file__).parent / "icons"
 
@@ -23,7 +23,7 @@ def _tinted_icon(filename, color):
     return QIcon(pixmap)
 
 
-class ChartPreview(Panel):
+class AnalyzeChart(Panel):
     _COLORS = ["#e6db74", "#66d9ef", "#f92672", "#a6e22e", "#fd971f", "#ae81ff", "#a1efe4", "#f8f8f2"]
 
     def __init__(self, parent, docked, x, y, w, h, **kw):
@@ -128,8 +128,8 @@ class ChartPreview(Panel):
         self._legend = None
 
         self._current_df = None
-        self._file_state = PanelStateManager.for_class(DataFileList)
-        self._file_state.subscribe("preview_selected_file", self._on_selection_changed)
+        self._file_state = PanelStateManager.for_class(AnalyzeDataFileList)
+        self._file_state.subscribe("analyze_selected_file", self._on_selection_changed)
 
     def _chart_home(self):
         self._chart.autoRange()

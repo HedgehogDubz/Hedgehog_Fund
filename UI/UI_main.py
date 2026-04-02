@@ -1,9 +1,11 @@
 from PyQt6.QtWidgets import QApplication, QMainWindow
 from tabdock import TabDock, apply_theme
 from UI.Panel_Retrieve import Retrieve
-from UI.Panel_DataFileList import DataFileList
+from UI.Panel_PreviewDataFileList import PreviewDataFileList
 from UI.Panel_TablePreview import TablePreview
-from UI.Panel_ChartPreview import ChartPreview
+from UI.Panel_PreviewChart import PreviewChart
+from UI.Panel_AnalyzeChart import AnalyzeChart
+from UI.Panel_AnalyzeDataFileList import AnalyzeDataFileList
 from UI.Panel_Simulate import Simulate
 from UI.Panel_Console import Console
 from UI.Tab_Analyze import AnalyzeTab
@@ -17,7 +19,7 @@ class MainUI(QMainWindow):
         self.resize(1200, 800)
 
         theme_kwargs = apply_theme("monokai")
-        all_panels = [Retrieve, DataFileList, TablePreview, ChartPreview, Simulate, Console]
+        all_panels = [Retrieve, PreviewDataFileList, TablePreview, PreviewChart, AnalyzeChart, AnalyzeDataFileList, Simulate, Console]
         self.tab_dock = TabDock(available_panels=all_panels, **theme_kwargs)
         self.setCentralWidget(self.tab_dock)
 

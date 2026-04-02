@@ -5,7 +5,7 @@ from retrieve_data import DATA_DIR, list_parquet_files, delete_parquet_file, ren
 
 
 class DataFileList(Panel):
-    def __init__(self, parent, docked, x, y, w, h, **kw):
+    def __init__(self, list_key, parent, docked, x, y, w, h, **kw):
         super().__init__(parent, docked, x, y, w, h, **kw)
 
         self.add_button("Rename", callback=self._on_rename)
@@ -14,7 +14,7 @@ class DataFileList(Panel):
         self.next_row()
         self._file_list = self.add_list(
             list_parquet_files(),
-            list_key="preview_selected_file",
+            list_key=list_key,
             callback=self._on_file_selected,
         )
 
@@ -25,7 +25,7 @@ class DataFileList(Panel):
 
     def _refresh_files(self):
         files = list_parquet_files()
-        current_sel = self.state.get("preview_selected_file", [])
+        current_sel = self.state.get(self.list_key, [])
         self._file_list.clear()
         self._file_list.addItems(files)
         for i in range(self._file_list.count()):
@@ -36,16 +36,16 @@ class DataFileList(Panel):
         pass
 
     def _on_delete(self):
-        selected = self.state.get("preview_selected_file", [])
+        selected = self.state.get(self._file_list.list_key, [])
         if not selected:
             return
         for f in selected:
             delete_parquet_file(f)
-        self.state.set("preview_selected_file", [])
+        self.state.set(self._file_list.list_key, [])
         self._refresh_files()
 
     def _on_rename(self):
-        selected = self.state.get("preview_selected_file", [])
+        selected = self.state.get(self._file_list.list_key, [])
         if not selected:
             return
         old_name = selected[0]
@@ -54,5 +54,5 @@ class DataFileList(Panel):
             if rename_parquet_file(old_name, new_name):
                 if not new_name.endswith(".parquet"):
                     new_name += ".parquet"
-                self.state.set("preview_selected_file", [new_name])
+                self.state.set(self._file_list.list_key, [new_name])
                 self._refresh_files()
