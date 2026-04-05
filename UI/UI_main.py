@@ -8,6 +8,8 @@ from UI.Panel_AnalyzeChart import AnalyzeChart
 from UI.Panel_AnalyzeDataFileList import AnalyzeDataFileList
 from UI.Panel_Simulate import Simulate
 from UI.Panel_Console import Console
+from UI.Panel_CreateFileList import CreateFileList
+from UI.Panel_IDE import IDE
 from UI.Tab_Analyze import AnalyzeTab
 from UI.Tab_Create import CreateTab
 from UI.Tab_Retrieve import RetrieveTab
@@ -19,7 +21,7 @@ class MainUI(QMainWindow):
         self.resize(1200, 800)
 
         theme_kwargs = apply_theme("monokai")
-        all_panels = [Retrieve, PreviewDataFileList, TablePreview, PreviewChart, AnalyzeChart, AnalyzeDataFileList, Simulate, Console]
+        all_panels = [Retrieve, PreviewDataFileList, TablePreview, PreviewChart, AnalyzeChart, AnalyzeDataFileList, Simulate, Console, CreateFileList, IDE]
         self.tab_dock = TabDock(available_panels=all_panels, **theme_kwargs)
         self.setCentralWidget(self.tab_dock)
 
