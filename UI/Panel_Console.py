@@ -1,8 +1,10 @@
+from pathlib import Path
 from tabdock import Panel
 from PyQt6.QtWidgets import QSizePolicy
 from PyQt6.QtCore import Qt
 
 
+CREATIONS_DIR = Path(__file__).resolve().parent.parent / "User_Creations"
 class Console(Panel):
     def __init__(self, parent, docked, x, y, w, h, **kw):
         super().__init__(parent, docked, x, y, w, h, **kw)
@@ -29,8 +31,70 @@ class Console(Panel):
 
     def _on_enter_pressed(self):
         text = self.line_edit.text()
-        self.write(f"{text}\n")
+        self.interpret(text)
         self.line_edit.clear()
 
     def write(self, text):
         self.label_console.setText(self.label_console.text() + text)
+
+    def clear(self):
+        self.label_console.setText("")
+    
+    def set_text(self, text):
+        self.label_console.setText(text)
+
+    def interpret(self, text):
+        self.write(f"▶ {text}\n")
+        try:
+            if (text.startswith("clear")):
+                self.clear()
+            
+            elif (text.startswith("run")):
+                self.run(text[4:].strip())
+                
+        except Exception as e:
+            self.write(f"{type(e).__name__}: {e}\n")
+
+    def run(self, filename):
+        filepath = CREATIONS_DIR / filename
+        try:
+            import subprocess
+
+            if filepath.suffix == ".cpp":
+                out_bin = filepath.with_suffix("")
+                comp = subprocess.run(
+                    ["g++", "-std=c++17", "-o", str(out_bin), str(filepath)],
+                    capture_output=True, text=True, timeout=30,
+                    cwd=str(filepath.parent),
+                )
+                if comp.returncode != 0:
+                    output = comp.stderr or "(compilation failed)\n"
+                    self.write(f"▶ g++ {filename}\n{output}\n")
+                    return
+                result = subprocess.run(
+                    [str(out_bin)],
+                    capture_output=True, text=True, timeout=30,
+                    cwd=str(filepath.parent),
+                )
+                run_label = f"./{filepath.stem}"
+            elif filepath.suffix == ".py":
+                result = subprocess.run(
+                    ["python3", str(filepath)],
+                    capture_output=True, text=True, timeout=30,
+                    cwd=str(filepath.parent),
+                )
+                run_label = f"python3 {filename}"
+            else:
+                return
+
+            output = ""
+            if result.stdout:
+                output += result.stdout
+            if result.stderr:
+                output += result.stderr
+            if not output:
+                output = "(no output)\n"
+
+            self.write(f"▶ {run_label}\n{output}\n")
+        except Exception:
+            pass

@@ -355,7 +355,7 @@ class IDE(Panel):
         save_shortcut = QShortcut(QKeySequence("Ctrl+S"), self)
         save_shortcut.activated.connect(self._save)
 
-        # Subscribe to file selection from CreateFileList
+        # Subscribe to selection from CreateFileList
         self._file_state = PanelStateManager.for_class(CreateFileList)
         self._file_state.subscribe("create_selected_file", self._on_selection_changed)
 
