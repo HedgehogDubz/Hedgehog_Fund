@@ -1,0 +1,9 @@
+import math;
+
+
+
+double a = math.pi;
+trade rolling_ma(){
+    a+=5;
+    print(a);
+}

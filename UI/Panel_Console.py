@@ -5,6 +5,15 @@ from PyQt6.QtCore import Qt
 
 
 CREATIONS_DIR = Path(__file__).resolve().parent.parent / "User_Creations"
+HOG_DIR = Path(__file__).resolve().parent.parent / "Hog"
+HOG_SOURCES = [
+    str(HOG_DIR / "hog.cpp"),
+    str(HOG_DIR / "compile.cpp"),
+    str(HOG_DIR / "parse.cpp"),
+    str(HOG_DIR / "typecheck.cpp"),
+    str(HOG_DIR / "interpret.cpp"),
+]
+
 class Console(Panel):
     def __init__(self, parent, docked, x, y, w, h, **kw):
         super().__init__(parent, docked, x, y, w, h, **kw)
@@ -39,7 +48,7 @@ class Console(Panel):
 
     def clear(self):
         self.label_console.setText("")
-    
+
     def set_text(self, text):
         self.label_console.setText(text)
 
@@ -48,12 +57,63 @@ class Console(Panel):
         try:
             if (text.startswith("clear")):
                 self.clear()
-            
-            elif (text.startswith("run")):
+
+            elif (text.startswith("run ")):
                 self.run(text[4:].strip())
-                
+
+            elif (text.startswith("hog build ")):
+                self.run_hog("build", text[10:].strip())
+
+            elif (text.startswith("hog run ")):
+                self.run_hog("run", text[8:].strip())
+
+            elif (text.startswith("hog ")):
+                self.run_hog("run", text[4:].strip())
+
         except Exception as e:
             self.write(f"{type(e).__name__}: {e}\n")
+
+    def _build_hog_compiler(self):
+        """Compile the hog binary. Returns (success, error_output)."""
+        import subprocess
+        hog_bin = HOG_DIR / "hog"
+        comp = subprocess.run(
+            ["g++", "-std=c++17", "-o", str(hog_bin)] + HOG_SOURCES,
+            capture_output=True, text=True, timeout=30,
+            cwd=str(HOG_DIR),
+        )
+        if comp.returncode != 0:
+            return False, comp.stderr or "(hog compiler build failed)\n"
+        return True, ""
+
+    def run_hog(self, command, filename):
+        """Run a hog command (build, run, build-run) on a .hog file."""
+        filepath = CREATIONS_DIR / filename
+        if not filepath.exists():
+            self.write(f"File not found: {filename}\n")
+            return
+        try:
+            import subprocess
+            ok, err = self._build_hog_compiler()
+            if not ok:
+                self.write(f"{err}\n")
+                return
+            hog_bin = HOG_DIR / "hog"
+            result = subprocess.run(
+                [str(hog_bin), command, str(filepath)],
+                capture_output=True, text=True, timeout=30,
+                cwd=str(filepath.parent),
+            )
+            output = ""
+            if result.stdout:
+                output += result.stdout
+            if result.stderr:
+                output += result.stderr
+            if not output:
+                output = "(no output)\n"
+            self.write(f"{output}\n")
+        except Exception:
+            pass
 
     def run(self, filename):
         filepath = CREATIONS_DIR / filename
@@ -84,6 +144,9 @@ class Console(Panel):
                     cwd=str(filepath.parent),
                 )
                 run_label = f"python3 {filename}"
+            elif filepath.suffix == ".hog":
+                self.run_hog("run", filename)
+                return
             else:
                 return
 

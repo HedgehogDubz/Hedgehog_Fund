@@ -1,49 +1,9 @@
-#include <string>
-#include <vector>
+#include "node.h"
 #include <stdexcept>
-
-// Forward declaration — Node is defined in compile.cpp
-struct Node;
 
 // ─── Parser ─────────────────────────────────────────────────────────────────
 // Transforms a flat token list (children of a "root" Node from tokenize())
-// into a nested AST.  Grammar (informal):
-//
-//   program        → statement*
-//   statement      → import_stmt | variable_decl | func_decl | class_decl
-//                  | struct_decl | enum_decl | trade_block | metric_block
-//                  | if_stmt | while_stmt | for_stmt | return_stmt
-//                  | break_stmt | continue_stmt | expr_stmt
-//   import_stmt    → "from" IDENT "import" IDENT ("," IDENT)* ";"
-//                  | "import" IDENT ("." IDENT)* ";"
-//   variable_decl  → type_spec IDENT ("=" expr)? ";"
-//   func_decl      → type_spec IDENT "(" params? ")" block
-//   class_decl     → "class" IDENT "{" member* "}"
-//   struct_decl    → "struct" IDENT "{" member* "}"
-//   enum_decl      → "enum" IDENT "{" IDENT ("," IDENT)* "}"
-//   trade_block    → "trade" IDENT block
-//   metric_block   → "metric" IDENT block
-//   if_stmt        → "if" "(" expr ")" block ("else" (if_stmt | block))?
-//   while_stmt     → "while" "(" expr ")" block
-//   for_stmt       → "for" "(" (variable_decl | expr_stmt) expr ";" expr ")" block
-//   return_stmt    → "return" expr? ";"
-//   break_stmt     → "break" ";"
-//   continue_stmt  → "continue" ";"
-//   expr_stmt      → expr ";"
-//   block          → "{" statement* "}"
-//   expr           → assignment
-//   assignment     → logical_or ("=" assignment)?
-//   logical_or     → logical_and ("||" logical_and)*
-//   logical_and    → equality ("&&" equality)*
-//   equality       → comparison (("==" | "!=") comparison)*
-//   comparison     → addition (("<" | ">" | "<=" | ">=") addition)*
-//   addition       → multiplication (("+" | "-") multiplication)*
-//   multiplication → unary (("*" | "/" | "%") unary)*
-//   unary          → ("!" | "-") unary | call
-//   call           → primary ( "(" args? ")" | "[" expr "]" | "." IDENT )*
-//   primary        → NUMBER | STRING | CHAR | "true" | "false" | IDENT | "(" expr ")"
-//                  | "buy" "(" args ")" | "sell" "(" args ")"
-//                  | signal_call
+// into a nested AST.  All AST nodes carry line/col from their source tokens.
 // ────────────────────────────────────────────────────────────────────────────
 
 class Parser {
@@ -66,6 +26,20 @@ private:
         Node* tok = tokens[pos];
         pos++;
         return tok;
+    }
+
+    // Current token's position (0,0 if at end)
+    int cur_line() { return at_end() ? 0 : tokens[pos]->line; }
+    int cur_col()  { return at_end() ? 0 : tokens[pos]->col; }
+
+    // Create a node at the current token's position
+    Node* make(const std::string& type, const std::string& value) {
+        return new Node(type, value, cur_line(), cur_col());
+    }
+
+    // Create a node at a saved position
+    Node* make_at(const std::string& type, const std::string& value, int ln, int cl) {
+        return new Node(type, value, ln, cl);
     }
 
     bool check(const std::string& type, const std::string& value) {
@@ -94,6 +68,15 @@ private:
             "Parse error: expected " + type + " '" + value + "' but got " + got_desc);
     }
 
+    Node* expect_any(const std::string& type1, const std::string& type2) {
+        if (!at_end() && (tokens[pos]->type == type1 || tokens[pos]->type == type2))
+            return advance();
+        Node* got = peek();
+        std::string got_desc = got ? (got->type + " '" + got->value + "'") : "end of input";
+        throw std::runtime_error(
+            "Parse error: expected " + type1 + " or " + type2 + " but got " + got_desc);
+    }
+
     // ── type recognition ────────────────────────────────────────────────
 
     bool is_type_keyword(const std::string& val) {
@@ -104,25 +87,19 @@ private:
             || val == "Set" || val == "Map";
     }
 
-    // Check if current position starts a type specifier (possibly followed by generic <…>)
     bool looking_at_type() {
         if (at_end()) return false;
         Node* tok = peek();
         if (tok->type == "keyword" && is_type_keyword(tok->value)) return true;
-        // Could also be a user-defined type (identifier) followed by identifier (var name)
-        
         return false;
     }
 
-    // Parse a type specifier
     Node* parse_type() {
-        Node* type_node = new Node("type", "");
-        // optional "const"
+        Node* type_node = make("type", "");
         if (check("keyword", "const")) {
             type_node->value = "const ";
             advance();
         }
-        // optional "auto"
         if (check("keyword", "auto")) {
             type_node->value += "auto";
             advance();
@@ -131,7 +108,6 @@ private:
         Node* tok = expect_any("keyword", "identifier");
         type_node->value += tok->value;
 
-        // generic parameters: Type<T, U>
         if (check("operator", "<")) {
             advance();
             type_node->value += "<";
@@ -147,31 +123,20 @@ private:
         return type_node;
     }
 
-    Node* expect_any(const std::string& type1, const std::string& type2) {
-        if (!at_end() && (tokens[pos]->type == type1 || tokens[pos]->type == type2))
-            return advance();
-        Node* got = peek();
-        std::string got_desc = got ? (got->type + " '" + got->value + "'") : "end of input";
-        throw std::runtime_error(
-            "Parse error: expected " + type1 + " or " + type2 + " but got " + got_desc);
-    }
-
-    // Check if we're looking at: type_spec IDENT  (i.e. a declaration)
     bool looking_at_declaration() {
         if (at_end()) return false;
         int save = pos;
         bool result = false;
         try {
-            // try to consume a type
             if (check("keyword", "const")) pos++;
             if (at_end()) { pos = save; return false; }
 
             Node* tok = peek();
             bool is_type = (tok->type == "keyword" && is_type_keyword(tok->value));
-            if (!is_type) { pos = save; return false; }
+            bool is_user_type = (tok->type == "identifier");
+            if (!is_type && !is_user_type) { pos = save; return false; }
             pos++;
 
-            // skip generic params
             if (!at_end() && check("operator", "<")) {
                 int depth = 1;
                 pos++;
@@ -182,9 +147,17 @@ private:
                 }
             }
 
-            // next should be an identifier
             if (!at_end() && tokens[pos]->type == "identifier") {
-                result = true;
+                // For user-defined types, verify it looks like a declaration
+                // (TypeName varName = ... or TypeName varName; or TypeName funcName(...))
+                if (is_user_type) {
+                    int next = pos + 1;
+                    if (next < (int)tokens.size()) {
+                        result = (tokens[next]->value == "=" || tokens[next]->value == ";" || tokens[next]->value == "(");
+                    }
+                } else {
+                    result = true;
+                }
             }
         } catch (...) {}
         pos = save;
@@ -194,7 +167,7 @@ private:
     // ── statements ──────────────────────────────────────────────────────
 
     Node* parse_program() {
-        Node* program = new Node("program", "");
+        Node* program = make("program", "");
         while (!at_end()) {
             program->add_child(parse_statement());
         }
@@ -205,39 +178,28 @@ private:
         Node* tok = peek();
         if (!tok) throw std::runtime_error("Parse error: unexpected end of input");
 
-        // import / from
         if (tok->type == "keyword" && tok->value == "import") return parse_import();
         if (tok->type == "keyword" && tok->value == "from")   return parse_from_import();
-
-        // class / struct / enum
+        if (tok->type == "keyword" && tok->value == "export") return parse_export();
         if (tok->type == "keyword" && tok->value == "class")  return parse_class();
         if (tok->type == "keyword" && tok->value == "struct") return parse_struct();
         if (tok->type == "keyword" && tok->value == "enum")   return parse_enum();
-
-        // control flow
         if (tok->type == "keyword" && tok->value == "if")       return parse_if();
         if (tok->type == "keyword" && tok->value == "while")    return parse_while();
         if (tok->type == "keyword" && tok->value == "for")      return parse_for();
         if (tok->type == "keyword" && tok->value == "return")   return parse_return();
         if (tok->type == "keyword" && tok->value == "break")    return parse_break();
         if (tok->type == "keyword" && tok->value == "continue") return parse_continue();
-
-        // trade / metric blocks
         if (tok->type == "keyword" && tok->value == "trade")  return parse_trade();
         if (tok->type == "keyword" && tok->value == "metric") return parse_metric();
-
-        // declaration (variable or function)
         if (looking_at_declaration()) return parse_declaration();
-
-        // fallback: expression statement
         return parse_expr_stmt();
     }
 
     // ── import ──────────────────────────────────────────────────────────
 
     Node* parse_import() {
-        // import foo.bar.baz;
-        Node* node = new Node("import", "");
+        int ln = cur_line(), cl = cur_col();
         advance(); // consume "import"
         std::string path;
         Node* name = expect_any("identifier", "keyword");
@@ -247,46 +209,92 @@ private:
             Node* part = expect_any("identifier", "keyword");
             path += part->value;
         }
-        node->value = path;
+        Node* node = make_at("import", path, ln, cl);
         expect("delimiter", ";");
         return node;
     }
 
     Node* parse_from_import() {
-        // from module import name1, name2;
-        Node* node = new Node("from_import", "");
+        int ln = cur_line(), cl = cur_col();
         advance(); // consume "from"
         Node* module = expect_any("identifier", "keyword");
-        node->value = module->value;
+        std::string path = module->value;
+        while (match("delimiter", ".")) {
+            Node* part = expect_any("identifier", "keyword");
+            path += "." + part->value;
+        }
+        Node* node = make_at("from_import", path, ln, cl);
         expect("keyword", "import");
         Node* first = expect_any("identifier", "keyword");
-        node->add_child(new Node("import_name", first->value));
+        node->add_child(make_at("import_name", first->value, first->line, first->col));
         while (match("delimiter", ",")) {
             Node* next = expect_any("identifier", "keyword");
-            node->add_child(new Node("import_name", next->value));
+            node->add_child(make_at("import_name", next->value, next->line, next->col));
         }
         expect("delimiter", ";");
+        return node;
+    }
+
+    // export <declaration | class | struct | enum>
+    Node* parse_export() {
+        int ln = cur_line(), cl = cur_col();
+        advance(); // consume "export"
+        Node* tok = peek();
+        Node* decl;
+        if (tok && tok->type == "keyword" && tok->value == "class")
+            decl = parse_class();
+        else if (tok && tok->type == "keyword" && tok->value == "struct")
+            decl = parse_struct();
+        else if (tok && tok->type == "keyword" && tok->value == "enum")
+            decl = parse_enum();
+        else
+            decl = parse_declaration();
+        Node* node = make_at("export", decl->value, ln, cl);
+        node->add_child(decl);
         return node;
     }
 
     // ── class / struct / enum ───────────────────────────────────────────
 
     Node* parse_class() {
-        advance(); // consume "class"
+        int ln = cur_line(), cl = cur_col();
+        advance();
         Node* name = expect_any("identifier", "keyword");
-        Node* node = new Node("class_decl", name->value);
+        Node* node = make_at("class_decl", name->value, ln, cl);
+        std::string access_modifier = "private";
+        // optional constructor parens after class name
+        if (match("delimiter", "(")) {
+            expect("delimiter", ")");
+        }
         expect("delimiter", "{");
         while (!check("delimiter", "}")) {
-            node->add_child(parse_statement());
+            // consume access modifiers (public/private/protected/static)
+            bool is_static = false;
+            if (!at_end() && peek()->type == "keyword" &&
+                (peek()->value == "public" || peek()->value == "private" || peek()->value == "protected")) {
+                access_modifier = peek()->value;
+                advance();
+            }
+            if (!at_end() && peek()->type == "keyword" && peek()->value == "static") {
+                is_static = true;
+                advance();
+            }
+            Node* member = parse_statement();
+            // Tag the member with its access level
+            std::string tag = access_modifier;
+            if (is_static) tag = "static_" + tag;
+            member->add_child(make_at("access", tag, member->line, member->col));
+            node->add_child(member);
         }
         expect("delimiter", "}");
         return node;
     }
 
     Node* parse_struct() {
-        advance(); // consume "struct"
+        int ln = cur_line(), cl = cur_col();
+        advance();
         Node* name = expect_any("identifier", "keyword");
-        Node* node = new Node("struct_decl", name->value);
+        Node* node = make_at("struct_decl", name->value, ln, cl);
         expect("delimiter", "{");
         while (!check("delimiter", "}")) {
             node->add_child(parse_statement());
@@ -296,17 +304,18 @@ private:
     }
 
     Node* parse_enum() {
-        advance(); // consume "enum"
+        int ln = cur_line(), cl = cur_col();
+        advance();
         Node* name = expect_any("identifier", "keyword");
-        Node* node = new Node("enum_decl", name->value);
+        Node* node = make_at("enum_decl", name->value, ln, cl);
         expect("delimiter", "{");
         if (!check("delimiter", "}")) {
             Node* val = expect_any("identifier", "keyword");
-            node->add_child(new Node("enum_value", val->value));
+            node->add_child(make_at("enum_value", val->value, val->line, val->col));
             while (match("delimiter", ",")) {
-                if (check("delimiter", "}")) break; // trailing comma
+                if (check("delimiter", "}")) break;
                 Node* next = expect_any("identifier", "keyword");
-                node->add_child(new Node("enum_value", next->value));
+                node->add_child(make_at("enum_value", next->value, next->line, next->col));
             }
         }
         expect("delimiter", "}");
@@ -316,17 +325,43 @@ private:
     // ── trade / metric ──────────────────────────────────────────────────
 
     Node* parse_trade() {
-        advance(); 
+        int ln = cur_line(), cl = cur_col();
+        advance();
         Node* name = expect_any("identifier", "keyword");
-        Node* node = new Node("trade_block", name->value);
+        Node* node = make_at("trade_block", name->value, ln, cl);
+        // optional parameter list: trade name (volume, low, high, open, close) { ... }
+        if (check("delimiter", "(")) {
+            advance();
+            node->add_child(parse_trade_params());
+            expect("delimiter", ")");
+        }
         node->add_child(parse_block());
         return node;
     }
 
+    Node* parse_trade_params() {
+        Node* params = make("trade_params", "");
+        if (check("delimiter", ")")) return params;
+        Node* first = expect_any("identifier", "keyword");
+        params->add_child(make_at("trade_param", first->value, first->line, first->col));
+        while (match("delimiter", ",")) {
+            Node* next = expect_any("identifier", "keyword");
+            params->add_child(make_at("trade_param", next->value, next->line, next->col));
+        }
+        return params;
+    }
+
     Node* parse_metric() {
-        advance(); 
+        int ln = cur_line(), cl = cur_col();
+        advance();
         Node* name = expect_any("identifier", "keyword");
-        Node* node = new Node("metric_block", name->value);
+        Node* node = make_at("metric_block", name->value, ln, cl);
+        // optional parameter list (same as trade)
+        if (check("delimiter", "(")) {
+            advance();
+            node->add_child(parse_trade_params());
+            expect("delimiter", ")");
+        }
         node->add_child(parse_block());
         return node;
     }
@@ -334,17 +369,18 @@ private:
     // ── control flow ────────────────────────────────────────────────────
 
     Node* parse_if() {
-        advance(); 
-        Node* node = new Node("if_stmt", "");
+        int ln = cur_line(), cl = cur_col();
+        advance();
+        Node* node = make_at("if_stmt", "", ln, cl);
         expect("delimiter", "(");
-        node->add_child(parse_expr()); // condition
+        node->add_child(parse_expr());
         expect("delimiter", ")");
-        node->add_child(parse_block()); // then-body
+        node->add_child(parse_block());
         if (match("keyword", "else")) {
             if (check("keyword", "if")) {
-                node->add_child(parse_if()); // else-if chain
+                node->add_child(parse_if());
             } else {
-                Node* else_node = new Node("else", "");
+                Node* else_node = make("else", "");
                 else_node->add_child(parse_block());
                 node->add_child(else_node);
             }
@@ -353,8 +389,9 @@ private:
     }
 
     Node* parse_while() {
-        advance(); // consume "while"
-        Node* node = new Node("while_stmt", "");
+        int ln = cur_line(), cl = cur_col();
+        advance();
+        Node* node = make_at("while_stmt", "", ln, cl);
         expect("delimiter", "(");
         node->add_child(parse_expr());
         expect("delimiter", ")");
@@ -363,32 +400,27 @@ private:
     }
 
     Node* parse_for() {
-        advance(); // consume "for"
-        Node* node = new Node("for_stmt", "");
+        int ln = cur_line(), cl = cur_col();
+        advance();
+        Node* node = make_at("for_stmt", "", ln, cl);
         expect("delimiter", "(");
-
-        // init — either a declaration or expression statement
         if (looking_at_declaration()) {
             node->add_child(parse_declaration());
         } else {
             node->add_child(parse_expr_stmt());
         }
-
-        // condition
         node->add_child(parse_expr());
         expect("delimiter", ";");
-
-        // increment
         node->add_child(parse_expr());
         expect("delimiter", ")");
-
         node->add_child(parse_block());
         return node;
     }
 
     Node* parse_return() {
-        advance(); // consume "return"
-        Node* node = new Node("return_stmt", "");
+        int ln = cur_line(), cl = cur_col();
+        advance();
+        Node* node = make_at("return_stmt", "", ln, cl);
         if (!check("delimiter", ";")) {
             node->add_child(parse_expr());
         }
@@ -397,15 +429,17 @@ private:
     }
 
     Node* parse_break() {
+        int ln = cur_line(), cl = cur_col();
         advance();
-        Node* node = new Node("break_stmt", "");
+        Node* node = make_at("break_stmt", "", ln, cl);
         expect("delimiter", ";");
         return node;
     }
 
     Node* parse_continue() {
+        int ln = cur_line(), cl = cur_col();
         advance();
-        Node* node = new Node("continue_stmt", "");
+        Node* node = make_at("continue_stmt", "", ln, cl);
         expect("delimiter", ";");
         return node;
     }
@@ -413,22 +447,21 @@ private:
     // ── declarations ────────────────────────────────────────────────────
 
     Node* parse_declaration() {
+        int ln = cur_line(), cl = cur_col();
         Node* type = parse_type();
         Node* name = expect_any("identifier", "keyword");
 
-        // function declaration:  type name( ... ) { ... }
         if (check("delimiter", "(")) {
-            Node* func = new Node("func_decl", name->value);
-            func->add_child(type); // return type
-            advance(); // consume "("
+            Node* func = make_at("func_decl", name->value, ln, cl);
+            func->add_child(type);
+            advance();
             func->add_child(parse_params());
             expect("delimiter", ")");
             func->add_child(parse_block());
             return func;
         }
 
-        // variable declaration:  type name = expr ;
-        Node* var = new Node("var_decl", name->value);
+        Node* var = make_at("var_decl", name->value, ln, cl);
         var->add_child(type);
         if (match("operator", "=")) {
             var->add_child(parse_expr());
@@ -438,8 +471,8 @@ private:
     }
 
     Node* parse_params() {
-        Node* params = new Node("params", "");
-        if (check("delimiter", ")")) return params; // no params
+        Node* params = make("params", "");
+        if (check("delimiter", ")")) return params;
         params->add_child(parse_param());
         while (match("delimiter", ",")) {
             params->add_child(parse_param());
@@ -448,9 +481,10 @@ private:
     }
 
     Node* parse_param() {
+        int ln = cur_line(), cl = cur_col();
         Node* type = parse_type();
         Node* name = expect_any("identifier", "keyword");
-        Node* param = new Node("param", name->value);
+        Node* param = make_at("param", name->value, ln, cl);
         param->add_child(type);
         return param;
     }
@@ -458,7 +492,7 @@ private:
     // ── block ───────────────────────────────────────────────────────────
 
     Node* parse_block() {
-        Node* block = new Node("block", "");
+        Node* block = make("block", "");
         expect("delimiter", "{");
         while (!check("delimiter", "}")) {
             if (at_end()) throw std::runtime_error("Parse error: unterminated block");
@@ -484,33 +518,56 @@ private:
 
     Node* parse_assignment() {
         Node* left = parse_logical_or();
+        int ln = cur_line(), cl = cur_col();
         if (match("operator", "=")) {
-            Node* node = new Node("assign", "=");
+            Node* node = make_at("assign", "=", ln, cl);
             node->add_child(left);
-            node->add_child(parse_assignment()); // right-associative
+            node->add_child(parse_assignment());
             return node;
+        }
+        // Compound assignment: +=, -=, *=, /=, %=
+        // Desugars x += expr into x = x + expr
+        for (const char* cop : {"+=", "-=", "*=", "/=", "%="}) {
+            if (match("operator", cop)) {
+                std::string base_op(1, cop[0]); // "+" from "+="
+                // Duplicate left node for the binary_op (left is shared between assign target and binop operand)
+                Node* left_copy = make_at(left->type, left->value, left->line, left->col);
+                Node* binop = make_at("binary_op", base_op, ln, cl);
+                binop->add_child(left_copy);
+                binop->add_child(parse_assignment());
+                Node* assign = make_at("assign", "=", ln, cl);
+                assign->add_child(left);
+                assign->add_child(binop);
+                return assign;
+            }
         }
         return left;
     }
 
     Node* parse_logical_or() {
         Node* left = parse_logical_and();
-        while (match("operator", "||")) {
-            Node* node = new Node("binary_op", "||");
-            node->add_child(left);
-            node->add_child(parse_logical_and());
-            left = node;
+        while (true) {
+            int ln = cur_line(), cl = cur_col();
+            if (match("operator", "||")) {
+                Node* node = make_at("binary_op", "||", ln, cl);
+                node->add_child(left);
+                node->add_child(parse_logical_and());
+                left = node;
+            } else break;
         }
         return left;
     }
 
     Node* parse_logical_and() {
         Node* left = parse_equality();
-        while (match("operator", "&&")) {
-            Node* node = new Node("binary_op", "&&");
-            node->add_child(left);
-            node->add_child(parse_equality());
-            left = node;
+        while (true) {
+            int ln = cur_line(), cl = cur_col();
+            if (match("operator", "&&")) {
+                Node* node = make_at("binary_op", "&&", ln, cl);
+                node->add_child(left);
+                node->add_child(parse_equality());
+                left = node;
+            } else break;
         }
         return left;
     }
@@ -518,13 +575,14 @@ private:
     Node* parse_equality() {
         Node* left = parse_comparison();
         while (true) {
+            int ln = cur_line(), cl = cur_col();
             if (match("operator", "==")) {
-                Node* node = new Node("binary_op", "==");
+                Node* node = make_at("binary_op", "==", ln, cl);
                 node->add_child(left);
                 node->add_child(parse_comparison());
                 left = node;
             } else if (match("operator", "!=")) {
-                Node* node = new Node("binary_op", "!=");
+                Node* node = make_at("binary_op", "!=", ln, cl);
                 node->add_child(left);
                 node->add_child(parse_comparison());
                 left = node;
@@ -536,23 +594,24 @@ private:
     Node* parse_comparison() {
         Node* left = parse_addition();
         while (true) {
+            int ln = cur_line(), cl = cur_col();
             if (match("operator", "<")) {
-                Node* node = new Node("binary_op", "<");
+                Node* node = make_at("binary_op", "<", ln, cl);
                 node->add_child(left);
                 node->add_child(parse_addition());
                 left = node;
             } else if (match("operator", ">")) {
-                Node* node = new Node("binary_op", ">");
+                Node* node = make_at("binary_op", ">", ln, cl);
                 node->add_child(left);
                 node->add_child(parse_addition());
                 left = node;
             } else if (match("operator", "<=")) {
-                Node* node = new Node("binary_op", "<=");
+                Node* node = make_at("binary_op", "<=", ln, cl);
                 node->add_child(left);
                 node->add_child(parse_addition());
                 left = node;
             } else if (match("operator", ">=")) {
-                Node* node = new Node("binary_op", ">=");
+                Node* node = make_at("binary_op", ">=", ln, cl);
                 node->add_child(left);
                 node->add_child(parse_addition());
                 left = node;
@@ -564,13 +623,14 @@ private:
     Node* parse_addition() {
         Node* left = parse_multiplication();
         while (true) {
+            int ln = cur_line(), cl = cur_col();
             if (match("operator", "+")) {
-                Node* node = new Node("binary_op", "+");
+                Node* node = make_at("binary_op", "+", ln, cl);
                 node->add_child(left);
                 node->add_child(parse_multiplication());
                 left = node;
             } else if (match("operator", "-")) {
-                Node* node = new Node("binary_op", "-");
+                Node* node = make_at("binary_op", "-", ln, cl);
                 node->add_child(left);
                 node->add_child(parse_multiplication());
                 left = node;
@@ -582,18 +642,19 @@ private:
     Node* parse_multiplication() {
         Node* left = parse_unary();
         while (true) {
+            int ln = cur_line(), cl = cur_col();
             if (match("operator", "*")) {
-                Node* node = new Node("binary_op", "*");
+                Node* node = make_at("binary_op", "*", ln, cl);
                 node->add_child(left);
                 node->add_child(parse_unary());
                 left = node;
             } else if (match("operator", "/")) {
-                Node* node = new Node("binary_op", "/");
+                Node* node = make_at("binary_op", "/", ln, cl);
                 node->add_child(left);
                 node->add_child(parse_unary());
                 left = node;
             } else if (match("operator", "%")) {
-                Node* node = new Node("binary_op", "%");
+                Node* node = make_at("binary_op", "%", ln, cl);
                 node->add_child(left);
                 node->add_child(parse_unary());
                 left = node;
@@ -603,13 +664,14 @@ private:
     }
 
     Node* parse_unary() {
+        int ln = cur_line(), cl = cur_col();
         if (match("operator", "!")) {
-            Node* node = new Node("unary_op", "!");
+            Node* node = make_at("unary_op", "!", ln, cl);
             node->add_child(parse_unary());
             return node;
         }
         if (match("operator", "-")) {
-            Node* node = new Node("unary_op", "-");
+            Node* node = make_at("unary_op", "-", ln, cl);
             node->add_child(parse_unary());
             return node;
         }
@@ -620,35 +682,42 @@ private:
         Node* left = parse_primary();
         while (true) {
             if (check("delimiter", "(")) {
-                // function call
+                int ln = left->line, cl = left->col;
                 advance();
-                Node* call = new Node("call", "");
-                call->add_child(left); // callee
+                Node* call = make_at("call", "", ln, cl);
+                call->add_child(left);
                 call->add_child(parse_args());
                 expect("delimiter", ")");
                 left = call;
             } else if (check("delimiter", "[")) {
-                // index access
+                int ln = left->line, cl = left->col;
                 advance();
-                Node* index = new Node("index", "");
+                Node* index = make_at("index", "", ln, cl);
                 index->add_child(left);
                 index->add_child(parse_expr());
                 expect("delimiter", "]");
                 left = index;
             } else if (check("delimiter", ".")) {
-                // member access
+                int ln = left->line, cl = left->col;
                 advance();
                 Node* member_name = expect_any("identifier", "keyword");
-                Node* member = new Node("member_access", member_name->value);
+                Node* member = make_at("member_access", member_name->value, ln, cl);
                 member->add_child(left);
                 left = member;
+            } else if (check("operator", "++") || check("operator", "--")) {
+                int ln = left->line, cl = left->col;
+                std::string op = peek()->value;
+                advance();
+                Node* node = make_at("postfix_op", op, ln, cl);
+                node->add_child(left);
+                left = node;
             } else break;
         }
         return left;
     }
 
     Node* parse_args() {
-        Node* args = new Node("args", "");
+        Node* args = make("args", "");
         if (check("delimiter", ")")) return args;
         args->add_child(parse_expr());
         while (match("delimiter", ",")) {
@@ -661,24 +730,38 @@ private:
         if (at_end()) throw std::runtime_error("Parse error: unexpected end of input in expression");
         Node* tok = peek();
 
-        // literals
+        // literals — tokens already have line/col from tokenizer
         if (tok->type == "int_literal" || tok->type == "float_literal"
             || tok->type == "string_literal" || tok->type == "char_literal") {
             return advance();
         }
 
-        // boolean literals
-        if (tok->type == "keyword" && (tok->value == "true" || tok->value == "false")) {
+        // new expression: new ClassName(args)
+        if (tok->type == "keyword" && tok->value == "new") {
+            int ln = tok->line, cl = tok->col;
             advance();
-            return new Node("bool_literal", tok->value);
+            Node* class_name = expect_any("identifier", "keyword");
+            Node* node = make_at("new_expr", class_name->value, ln, cl);
+            expect("delimiter", "(");
+            node->add_child(parse_args());
+            expect("delimiter", ")");
+            return node;
         }
 
-        // buy / sell  (trading actions used as expressions)
+        // boolean literals
+        if (tok->type == "keyword" && (tok->value == "true" || tok->value == "false")) {
+            int ln = tok->line, cl = tok->col;
+            advance();
+            return make_at("bool_literal", tok->value, ln, cl);
+        }
+
+        // buy / sell
         if (tok->type == "keyword" && (tok->value == "buy" || tok->value == "sell")) {
+            int ln = tok->line, cl = tok->col;
             std::string action = tok->value;
             advance();
             expect("delimiter", "(");
-            Node* node = new Node("trade_action", action);
+            Node* node = make_at("trade_action", action, ln, cl);
             node->add_child(parse_args());
             expect("delimiter", ")");
             return node;
@@ -688,18 +771,59 @@ private:
         if (tok->type == "keyword"
             && (tok->value == "signal_int" || tok->value == "signal_string"
                 || tok->value == "signal_bool")) {
+            int ln = tok->line, cl = tok->col;
             std::string sig = tok->value;
             advance();
             expect("delimiter", "(");
-            Node* node = new Node("signal", sig);
+            Node* node = make_at("signal", sig, ln, cl);
             node->add_child(parse_args());
             expect("delimiter", ")");
             return node;
         }
 
-        // identifiers
+        // identifiers — already have line/col from tokenizer
         if (tok->type == "identifier") {
             return advance();
+        }
+
+        // list / array literal: [expr, expr, ...]
+        if (tok->type == "delimiter" && tok->value == "[") {
+            int ln = tok->line, cl = tok->col;
+            advance();
+            Node* node = make_at("list_literal", "", ln, cl);
+            if (!check("delimiter", "]")) {
+                node->add_child(parse_expr());
+                while (match("delimiter", ",")) {
+                    if (check("delimiter", "]")) break;
+                    node->add_child(parse_expr());
+                }
+            }
+            expect("delimiter", "]");
+            return node;
+        }
+
+        // map literal: {key: val, key: val, ...}
+        if (tok->type == "delimiter" && tok->value == "{") {
+            int ln = tok->line, cl = tok->col;
+            advance();
+            Node* node = make_at("map_literal", "", ln, cl);
+            if (!check("delimiter", "}")) {
+                Node* pair = make("pair", "");
+                pair->add_child(parse_expr());
+                expect("delimiter", ":");
+                pair->add_child(parse_expr());
+                node->add_child(pair);
+                while (match("delimiter", ",")) {
+                    if (check("delimiter", "}")) break;
+                    Node* p = make("pair", "");
+                    p->add_child(parse_expr());
+                    expect("delimiter", ":");
+                    p->add_child(parse_expr());
+                    node->add_child(p);
+                }
+            }
+            expect("delimiter", "}");
+            return node;
         }
 
         // grouped expression
@@ -728,15 +852,13 @@ Node* parse(Node* token_root) {
     Node* ast = parser.parse();
 
     // Replace the flat token list with the structured AST
-    // Clear old children without deleting (AST now owns the token nodes it kept)
     token_root->children.clear();
     token_root->type = "program";
 
-    // Move AST children into root
     for (Node* child : ast->children) {
         token_root->add_child(child);
     }
-    ast->children.clear(); // prevent double-free
+    ast->children.clear();
     delete ast;
 
     return token_root;

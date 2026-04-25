@@ -1,0 +1,12 @@
+export class Timer(){
+	private int t = -1;
+	public void start() {
+		t = chrono();
+	}
+	public int get() {
+		return (chrono() - t);
+	}
+	public int get_ms() {
+		return (chrono() - t) / 1000.0;
+	}
+}

@@ -1,3 +1,4 @@
+from pathlib import Path
 from PyQt6.QtWidgets import (
     QPlainTextEdit, QTextEdit, QWidget, QHBoxLayout, QSizePolicy,
     QListWidget, QListWidgetItem,
@@ -12,8 +13,10 @@ from tabdock.panel_state import PanelStateManager
 from UI.Panel_CreateFileList import CreateFileList, CREATIONS_DIR
 from UI.Highlighter_Python import PythonHighlighter
 from UI.Highlighter_Cpp import CppHighlighter
+from UI.Highlighter_Hog import HogHighlighter
 from UI.Intellisense_Python import get_python_completions
 from UI.Intellisense_Cpp import get_cpp_completions
+from UI.Intellisense_Hog import get_hog_completions
 
 
 # ── Line-number gutter ────────────────────────────────────────────────
@@ -175,6 +178,11 @@ class CodeEditor(QPlainTextEdit):
     def set_language(self, lang):
         self._lang = lang
 
+    def mousePressEvent(self, event):
+        if self._completer.isVisible():
+            self._completer.hide()
+        super().mousePressEvent(event)
+
     def keyPressEvent(self, event):
         # Handle completer navigation when visible
         if self._completer.isVisible():
@@ -234,6 +242,8 @@ class CodeEditor(QPlainTextEdit):
             results = get_cpp_completions(prefix)
         elif self._lang == "python":
             results = get_python_completions(prefix)
+        elif self._lang == "hog":
+            results = get_hog_completions(prefix)
         else:
             results = []
 
@@ -325,7 +335,9 @@ class IDE(Panel):
         # Toolbar row
         self._title_label = self.add_label("No file selected")
         self.add_button("Save", callback=self._save)
+        self.add_button("Build", callback=self._build)
         self.add_button("Run", callback=self._run)
+        self.add_button("Build & Run", callback=self._build_and_run)
 
         # Editor row
         self.next_row()
@@ -369,6 +381,9 @@ class IDE(Panel):
         elif ext == ".py":
             self._highlighter = PythonHighlighter(self._editor.document())
             self._editor.set_language("python")
+        elif ext == ".hog":
+            self._highlighter = HogHighlighter(self._editor.document())
+            self._editor.set_language("hog")
         else:
             self._editor.set_language("plain")
 
@@ -417,7 +432,16 @@ class IDE(Panel):
         self._dirty = False
         self._title_label.setText(self._current_file)
 
+    def _build(self):
+        self._exec_file("build")
+
     def _run(self):
+        self._exec_file("run")
+
+    def _build_and_run(self):
+        self._exec_file("build-run")
+
+    def _exec_file(self, mode="run"):
         if not self._current_file:
             return
         if self._dirty:
@@ -441,6 +465,10 @@ class IDE(Panel):
                     current = console_state.get("console_text", "")
                     console_state.set("console_text", current + f"▶ g++ {self._current_file}\n{output}\n")
                     return
+                if mode == "build":
+                    current = console_state.get("console_text", "")
+                    console_state.set("console_text", current + "Build Complete\n")
+                    return
                 result = subprocess.run(
                     [str(out_bin)],
                     capture_output=True, text=True, timeout=30,
@@ -448,12 +476,19 @@ class IDE(Panel):
                 )
                 run_label = f"./{filepath.stem}"
             elif filepath.suffix == ".py":
+                if mode == "build":
+                    current = console_state.get("console_text", "")
+                    console_state.set("console_text", current + "Build Complete\n")
+                    return
                 result = subprocess.run(
                     ["python3", str(filepath)],
                     capture_output=True, text=True, timeout=30,
                     cwd=str(filepath.parent),
                 )
                 run_label = f"python3 {self._current_file}"
+            elif filepath.suffix == ".hog":
+                self._exec_hog(filepath, mode, console_state)
+                return
             else:
                 current = console_state.get("console_text", "")
                 console_state.set("console_text", current + f"▶ Cannot run {filepath.suffix} files\n")
@@ -471,3 +506,44 @@ class IDE(Panel):
             console_state.set("console_text", current + f"▶ {run_label}\n{output}\n")
         except Exception:
             pass
+
+    def _exec_hog(self, filepath, mode, console_state):
+        import subprocess
+        hog_dir = Path(__file__).resolve().parent.parent / "Hog"
+        hog_bin = hog_dir / "hog"
+        hog_sources = [
+            str(hog_dir / "hog.cpp"),
+            str(hog_dir / "compile.cpp"),
+            str(hog_dir / "parse.cpp"),
+            str(hog_dir / "typecheck.cpp"),
+            str(hog_dir / "interpret.cpp"),
+        ]
+        comp = subprocess.run(
+            ["g++", "-std=c++17", "-o", str(hog_bin)] + hog_sources,
+            capture_output=True, text=True, timeout=30,
+            cwd=str(hog_dir),
+        )
+        if comp.returncode != 0:
+            output = comp.stderr or "(hog compiler build failed)\n"
+            current = console_state.get("console_text", "")
+            console_state.set("console_text", current + f"▶ hog build\n{output}\n")
+            return
+
+        # map mode to hog command
+        hog_cmd = mode  # build, run, or build-run
+
+        result = subprocess.run(
+            [str(hog_bin), hog_cmd, str(filepath)],
+            capture_output=True, text=True, timeout=30,
+            cwd=str(filepath.parent),
+        )
+        output = ""
+        if result.stdout:
+            output += result.stdout
+        if result.stderr:
+            output += result.stderr
+        if not output:
+            output = "(no output)\n"
+
+        current = console_state.get("console_text", "")
+        console_state.set("console_text", current + f"{output}\n")

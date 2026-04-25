@@ -1,25 +1,6 @@
-#include <string>
-#include <vector>
+#include "node.h"
 #include <stdexcept>
 #include <unordered_set>
-
-struct Node {
-    std::string type;
-    std::string value;
-    std::vector<Node*> children;
-
-    Node(std::string t, std::string val) : type(t), value(val) {}
-
-    void add_child(Node* child) {
-        children.push_back(child);
-    }
-
-    ~Node() {
-        for (Node* child : children) {
-            delete child;
-        }
-    }
-};
 
 static const std::unordered_set<std::string> KEYWORDS = {
     // primitive types
@@ -37,18 +18,21 @@ static const std::unordered_set<std::string> KEYWORDS = {
     "buy", "sell",
     // signals
     "signal_int", "signal_string", "signal_bool",
-    // imports
-    "import", "from",
+    // imports / exports
+    "import", "from", "export",
     // user-defined types
-    "class", "struct", "enum",
+    "class", "struct", "enum", "new",
+    // access modifiers
+    "public", "private", "protected", "static",
     // literals
     "true", "false",
     // interop targets
     "python", "cpp", "hog"
+    
 };
 
 static const std::unordered_set<std::string> TWO_CHAR_OPS = {
-    "==", "!=", "<=", ">=", "&&", "||"
+    "==", "!=", "<=", ">=", "&&", "||", "++", "--", "+=", "-=", "*=", "/=", "%="
 };
 
 static const std::unordered_set<char> SINGLE_CHAR_OPS = {
@@ -56,7 +40,7 @@ static const std::unordered_set<char> SINGLE_CHAR_OPS = {
 };
 
 static const std::unordered_set<char> DELIMITERS = {
-    '(', ')', '{', '}', '[', ']', ';', ',', '.'
+    '(', ')', '{', '}', '[', ']', ';', ',', '.', ':'
 };
 
 static bool is_ident_start(char c) {
@@ -125,6 +109,7 @@ Node* tokenize(std::string code) {
 
         // string literal
         if (c == '"') {
+            int start_line = line, start_col = col;
             std::string str;
             i++;
             col++;
@@ -153,14 +138,15 @@ Node* tokenize(std::string code) {
                 throw std::runtime_error(
                     "Unterminated string literal at line " + std::to_string(line));
             }
-            i++; 
+            i++;
             col++;
-            root->add_child(new Node("string_literal", str));
+            root->add_child(new Node("string_literal", str, start_line, start_col));
             continue;
         }
 
         // char literal
         if (c == '\'') {
+            int start_line = line, start_col = col;
             std::string ch;
             i++;
             col++;
@@ -184,14 +170,15 @@ Node* tokenize(std::string code) {
                 throw std::runtime_error(
                     "Unterminated char literal at line " + std::to_string(line));
             }
-            i++; 
+            i++;
             col++;
-            root->add_child(new Node("char_literal", ch));
+            root->add_child(new Node("char_literal", ch, start_line, start_col));
             continue;
         }
 
         // number literal (int or float/double)
         if (is_digit(c)) {
+            int start_line = line, start_col = col;
             std::string num;
             bool is_float = false;
             while (i < len && is_digit(code[i])) {
@@ -210,12 +197,13 @@ Node* tokenize(std::string code) {
                     col++;
                 }
             }
-            root->add_child(new Node(is_float ? "float_literal" : "int_literal", num));
+            root->add_child(new Node(is_float ? "float_literal" : "int_literal", num, start_line, start_col));
             continue;
         }
 
         // identifier or keyword
         if (is_ident_start(c)) {
+            int start_line = line, start_col = col;
             std::string word;
             while (i < len && is_ident_char(code[i])) {
                 word += code[i];
@@ -223,9 +211,9 @@ Node* tokenize(std::string code) {
                 col++;
             }
             if (KEYWORDS.count(word)) {
-                root->add_child(new Node("keyword", word));
+                root->add_child(new Node("keyword", word, start_line, start_col));
             } else {
-                root->add_child(new Node("identifier", word));
+                root->add_child(new Node("identifier", word, start_line, start_col));
             }
             continue;
         }
@@ -234,7 +222,7 @@ Node* tokenize(std::string code) {
         if (i + 1 < len) {
             std::string two_char = std::string(1, c) + code[i + 1];
             if (TWO_CHAR_OPS.count(two_char)) {
-                root->add_child(new Node("operator", two_char));
+                root->add_child(new Node("operator", two_char, line, col));
                 i += 2;
                 col += 2;
                 continue;
@@ -243,7 +231,7 @@ Node* tokenize(std::string code) {
 
         // single-character operators
         if (SINGLE_CHAR_OPS.count(c)) {
-            root->add_child(new Node("operator", std::string(1, c)));
+            root->add_child(new Node("operator", std::string(1, c), line, col));
             i++;
             col++;
             continue;
@@ -251,7 +239,7 @@ Node* tokenize(std::string code) {
 
         // delimiters
         if (DELIMITERS.count(c)) {
-            root->add_child(new Node("delimiter", std::string(1, c)));
+            root->add_child(new Node("delimiter", std::string(1, c), line, col));
             i++;
             col++;
             continue;
@@ -268,9 +256,29 @@ Node* tokenize(std::string code) {
 
 // Defined in parse.cpp
 Node* parse(Node* token_root);
+// Defined in typecheck.cpp
+std::vector<std::string> typecheck(Node* ast, const std::string& source_dir);
 
+// Compile without type-checking (used by interpreter for imported modules)
 Node* compile(std::string code) {
     Node* tokens = tokenize(code);
     parse(tokens);
+    return tokens;
+}
+
+// Compile with type-checking (used by main entry point)
+Node* compile(std::string code, const std::string& source_dir) {
+    Node* tokens = tokenize(code);
+    parse(tokens);
+
+    std::vector<std::string> type_errors = typecheck(tokens, source_dir);
+    if (!type_errors.empty()) {
+        std::string msg;
+        for (const std::string& e : type_errors) {
+            msg += e + "\n";
+        }
+        throw std::runtime_error(msg);
+    }
+
     return tokens;
 }

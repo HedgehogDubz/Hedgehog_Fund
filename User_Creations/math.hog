@@ -1,0 +1,16 @@
+export class math {
+	public static double pi = 3.14159265358979323846264;
+    public static float sqrt(float num){
+        	float i = 0.0;
+        	float j = num / 2.0;
+        	while (j != i){
+        		i = j;
+        		j = (num / i + i) / 2.0;
+        	}
+        	return j;
+    }
+    public static float pow(float base, float exponent){
+        
+    }
+
+}
