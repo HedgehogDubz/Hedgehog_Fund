@@ -7,6 +7,7 @@ from retrieve_data import DATA_DIR, list_parquet_files, delete_parquet_file, ren
 class DataFileList(Panel):
     def __init__(self, list_key, parent, docked, x, y, w, h, **kw):
         super().__init__(parent, docked, x, y, w, h, **kw)
+        self.list_key = list_key
 
         self.add_button("Rename", callback=self._on_rename)
         self.add_button("Delete", callback=self._on_delete)
@@ -36,16 +37,16 @@ class DataFileList(Panel):
         pass
 
     def _on_delete(self):
-        selected = self.state.get(self._file_list.list_key, [])
+        selected = self.state.get(self.list_key, [])
         if not selected:
             return
         for f in selected:
             delete_parquet_file(f)
-        self.state.set(self._file_list.list_key, [])
+        self.state.set(self.list_key, [])
         self._refresh_files()
 
     def _on_rename(self):
-        selected = self.state.get(self._file_list.list_key, [])
+        selected = self.state.get(self.list_key, [])
         if not selected:
             return
         old_name = selected[0]
@@ -54,5 +55,5 @@ class DataFileList(Panel):
             if rename_parquet_file(old_name, new_name):
                 if not new_name.endswith(".parquet"):
                     new_name += ".parquet"
-                self.state.set(self._file_list.list_key, [new_name])
+                self.state.set(self.list_key, [new_name])
                 self._refresh_files()

@@ -12,6 +12,7 @@ HOG_SOURCES = [
     str(HOG_DIR / "parse.cpp"),
     str(HOG_DIR / "typecheck.cpp"),
     str(HOG_DIR / "interpret.cpp"),
+    str(HOG_DIR / "trade.cpp"),
 ]
 
 class Console(Panel):

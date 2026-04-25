@@ -6,13 +6,16 @@
 Node* compile(std::string code, const std::string& source_dir);
 // Defined in interpret.cpp
 void interpret(Node* ast, const std::string& source_dir);
+// Defined in trade.cpp
+std::vector<std::string> get_trades();
 
 static void print_usage() {
-    std::cerr << "Usage: hog <command> <filename.hog>\n";
+    std::cerr << "Usage: hog <command> [filename.hog]\n";
     std::cerr << "Commands:\n";
     std::cerr << "  build      Compile and type-check only\n";
     std::cerr << "  run        Compile, type-check, and execute\n";
     std::cerr << "  build-run  Same as run (compile + execute)\n";
+    std::cerr << "  trades     List all trade blocks across .hog files\n";
 }
 
 // Extract directory from a file path
@@ -23,12 +26,31 @@ static std::string dir_of(const std::string& filepath) {
 }
 
 int main(int argc, char* argv[]) {
-    if (argc < 3) {
+    if (argc < 2) {
         print_usage();
         return 1;
     }
 
     std::string command = argv[1];
+
+    // "hog trades" — no filename needed
+    if (command == "trades") {
+        try {
+            auto trades = get_trades();
+            for (auto& name : trades)
+                std::cout << name << "\n";
+        } catch (const std::exception& e) {
+            std::cerr << "Error: " << e.what() << "\n";
+            return 1;
+        }
+        return 0;
+    }
+
+    if (argc < 3) {
+        print_usage();
+        return 1;
+    }
+
     std::string filename = argv[2];
 
     if (command != "build" && command != "run" && command != "build-run") {

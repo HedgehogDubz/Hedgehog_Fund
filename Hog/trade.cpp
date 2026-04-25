@@ -2,9 +2,10 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
-#include
 // Defined in compile.cpp
 Node* compile(std::string code);
+// Defined in interpret.cpp
+void interpret(Node* ast, const std::string& source_dir);
 
 std::vector<std::string> get_hog_files() {
     std::vector<std::string> hog_files;
@@ -68,10 +69,11 @@ int run_trade(std::string trade_name){
 
             delete ast;
         } catch (...) {
-
+            std::cout << "Error: " << filepath << " failed to parse\n";
             // Skip files that fail to parse
         }
     }
 
-    return 1;
+    return -1;
 }
+
