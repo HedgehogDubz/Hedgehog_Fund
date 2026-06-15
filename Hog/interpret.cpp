@@ -1,4 +1,6 @@
 #include "node.h"
+#include "hog_native.h"
+#include "native_loader.h"
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
@@ -10,6 +12,7 @@
 #include <cmath>
 #include <ctime>
 #include <functional>
+#include <numbers>
 
 // Defined in compile.cpp
 Node* compile(std::string code);
@@ -170,6 +173,133 @@ struct ClassDef {
     std::unordered_map<std::string, Value> static_fields;
 };
 
+// ── Native-module bridge ────────────────────────────────────────────────────
+// Glue between hog Values and the HogContext callbacks user .cpp code uses.
+struct NativeBridge {
+    const std::vector<Value>* args = nullptr;
+    Value result = Value::make_void();
+    bool result_set = false;
+    bool building_map = false;
+    std::vector<std::pair<Value, Value>> map_pairs;
+    // Owned buffers so accessor return pointers stay valid through the call.
+    std::vector<std::vector<double>>    double_bufs;
+    std::vector<std::vector<long long>> int_bufs;
+    std::vector<std::string>            string_bufs;
+};
+
+static NativeBridge* bridge_of(HogContext* ctx) {
+    return static_cast<NativeBridge*>(ctx->internal);
+}
+
+static int  br_arg_count (HogContext* ctx)         { return (int)bridge_of(ctx)->args->size(); }
+static long long br_arg_int(HogContext* ctx, int i){
+    auto* b = bridge_of(ctx);
+    if (i < 0 || i >= (int)b->args->size()) return 0;
+    return (*b->args)[i].as_int();
+}
+static double br_arg_double(HogContext* ctx, int i){
+    auto* b = bridge_of(ctx);
+    if (i < 0 || i >= (int)b->args->size()) return 0.0;
+    return (*b->args)[i].as_double();
+}
+static const char* br_arg_string(HogContext* ctx, int i){
+    auto* b = bridge_of(ctx);
+    if (i < 0 || i >= (int)b->args->size()) return "";
+    b->string_bufs.push_back((*b->args)[i].sval);
+    return b->string_bufs.back().c_str();
+}
+static const double* br_arg_list_double(HogContext* ctx, int i, int* out_len){
+    auto* b = bridge_of(ctx);
+    if (i < 0 || i >= (int)b->args->size() || !(*b->args)[i].elems) {
+        *out_len = 0; return nullptr;
+    }
+    const auto& src = *(*b->args)[i].elems;
+    std::vector<double> buf;
+    buf.reserve(src.size());
+    for (auto& el : src) buf.push_back(el.as_double());
+    *out_len = (int)buf.size();
+    b->double_bufs.push_back(std::move(buf));
+    return b->double_bufs.back().data();
+}
+static const long long* br_arg_list_int(HogContext* ctx, int i, int* out_len){
+    auto* b = bridge_of(ctx);
+    if (i < 0 || i >= (int)b->args->size() || !(*b->args)[i].elems) {
+        *out_len = 0; return nullptr;
+    }
+    const auto& src = *(*b->args)[i].elems;
+    std::vector<long long> buf;
+    buf.reserve(src.size());
+    for (auto& el : src) buf.push_back(el.as_int());
+    *out_len = (int)buf.size();
+    b->int_bufs.push_back(std::move(buf));
+    return b->int_bufs.back().data();
+}
+
+static void br_ret_int(HogContext* ctx, long long v){
+    auto* b = bridge_of(ctx); b->result = Value::make_int(v); b->result_set = true;
+}
+static void br_ret_double(HogContext* ctx, double v){
+    auto* b = bridge_of(ctx); b->result = Value::make_double(v); b->result_set = true;
+}
+static void br_ret_string(HogContext* ctx, const char* s){
+    auto* b = bridge_of(ctx); b->result = Value::make_string(s ? s : ""); b->result_set = true;
+}
+static void br_ret_list_double(HogContext* ctx, const double* data, int len){
+    auto* b = bridge_of(ctx);
+    std::vector<Value> elems; elems.reserve(len);
+    for (int i = 0; i < len; i++) elems.push_back(Value::make_double(data[i]));
+    b->result = Value::make_list(elems); b->result_set = true;
+}
+static void br_ret_list_int(HogContext* ctx, const long long* data, int len){
+    auto* b = bridge_of(ctx);
+    std::vector<Value> elems; elems.reserve(len);
+    for (int i = 0; i < len; i++) elems.push_back(Value::make_int(data[i]));
+    b->result = Value::make_list(elems); b->result_set = true;
+}
+static void br_ret_map_begin(HogContext* ctx){
+    auto* b = bridge_of(ctx); b->building_map = true; b->map_pairs.clear();
+}
+static void br_ret_map_set_double(HogContext* ctx, const char* k, double v){
+    bridge_of(ctx)->map_pairs.push_back({Value::make_string(k ? k : ""), Value::make_double(v)});
+}
+static void br_ret_map_set_int(HogContext* ctx, const char* k, long long v){
+    bridge_of(ctx)->map_pairs.push_back({Value::make_string(k ? k : ""), Value::make_int(v)});
+}
+static void br_ret_map_set_list_double(HogContext* ctx, const char* k, const double* data, int len){
+    auto* b = bridge_of(ctx);
+    std::vector<Value> elems; elems.reserve(len);
+    for (int i = 0; i < len; i++) elems.push_back(Value::make_double(data[i]));
+    b->map_pairs.push_back({Value::make_string(k ? k : ""), Value::make_list(elems)});
+}
+static void br_ret_map_set_list_int(HogContext* ctx, const char* k, const long long* data, int len){
+    auto* b = bridge_of(ctx);
+    std::vector<Value> elems; elems.reserve(len);
+    for (int i = 0; i < len; i++) elems.push_back(Value::make_int(data[i]));
+    b->map_pairs.push_back({Value::make_string(k ? k : ""), Value::make_list(elems)});
+}
+
+static HogContext make_hog_ctx(NativeBridge& b) {
+    HogContext c{};
+    c.arg_count = br_arg_count;
+    c.arg_int = br_arg_int;
+    c.arg_double = br_arg_double;
+    c.arg_string = br_arg_string;
+    c.arg_list_double = br_arg_list_double;
+    c.arg_list_int = br_arg_list_int;
+    c.ret_int = br_ret_int;
+    c.ret_double = br_ret_double;
+    c.ret_string = br_ret_string;
+    c.ret_list_double = br_ret_list_double;
+    c.ret_list_int = br_ret_list_int;
+    c.ret_map_begin = br_ret_map_begin;
+    c.ret_map_set_double = br_ret_map_set_double;
+    c.ret_map_set_int = br_ret_map_set_int;
+    c.ret_map_set_list_double = br_ret_map_set_list_double;
+    c.ret_map_set_list_int = br_ret_map_set_list_int;
+    c.internal = &b;
+    return c;
+}
+
 class Interpreter {
 private:
     std::vector<std::unordered_map<std::string, Value>> scopes;
@@ -179,6 +309,10 @@ private:
     std::string source_dir;
     std::string current_class;  // non-empty when executing inside a class method
     std::unordered_set<std::string> imported_files; // prevent circular imports
+    std::vector<NativeModule> native_modules;        // loaded .cpp modules
+    // The bar index currently being processed inside a per-bar trade run.
+    // -1 outside of a per-bar trade. buy()/sell() with no args use this.
+    long long current_bar_index = -1;
 
     // ── built-in functions ──────────────────────────────────────────────
 
@@ -202,6 +336,38 @@ private:
         });
         make_builtin_function("chrono", [this](Node*) -> Value {
             return Value::make_int(std::chrono::high_resolution_clock::now().time_since_epoch().count());
+        });
+
+        // ── math ─────────────────────────────────────────────────────────
+        make_builtin_function("pow", [this](Node* args) -> Value {
+            if (!args || args->children.size() < 2)
+                throw std::runtime_error("Runtime error: pow expects {base: number, exponent: number}");
+            double b = eval(args->children[0]).as_double();
+            double e = eval(args->children[1]).as_double();
+            return Value::make_double(std::pow(b, e));
+        });
+        make_builtin_function("sqrt", [this](Node* args) -> Value {
+            if (!args || args->children.empty())
+                throw std::runtime_error("Runtime error: sqrt expects {x: number}");
+            double x = eval(args->children[0]).as_double();
+            return Value::make_double(std::sqrt(x));
+        });
+        make_builtin_function("log", [this](Node* args) -> Value {
+            if (!args || args->children.empty())
+                throw std::runtime_error("Runtime error: log expects {x: number, base?: number}");
+            double x = eval(args->children[0]).as_double();
+            if (args->children.size() >= 2) {
+                double base = eval(args->children[1]).as_double();
+                return Value::make_double(std::log(x) / std::log(base));
+            }
+            return Value::make_double(std::log(x));
+        });
+        make_builtin_function("abs", [this](Node* args) -> Value {
+            if (!args || args->children.empty())
+                throw std::runtime_error("Runtime error: abs expects {x: number}");
+            Value v = eval(args->children[0]);
+            if (v.is_integer()) return Value::make_int(std::llabs(v.as_int()));
+            return Value::make_double(std::fabs(v.as_double()));
         });
     }
 
@@ -238,7 +404,7 @@ private:
         if (!node) return;
         const std::string& t = node->type;
         if (t == "program") exec_program(node);
-        else if (t == "var_decl") exec_var_decl(node);
+        else if (t == "var_decl" || t == "parameter_decl") exec_var_decl(node);
         else if (t == "func_decl") {}
         else if (t == "block") exec_block(node);
         else if (t == "if_stmt") exec_if(node);
@@ -253,7 +419,37 @@ private:
         else if (t == "struct_decl" || t == "enum_decl") {}
         else if (t == "import") exec_import(node);
         else if (t == "from_import") exec_from_import(node);
+        else if (t == "import_cpp") exec_import_cpp(node);
         else eval(node);
+    }
+
+    void exec_import_cpp(Node* node) {
+        NativeModule mod = load_native_module(source_dir, node->value);
+        native_modules.push_back(mod);
+        for (const std::string& fn_name : mod.exports) {
+            void* sym = native_module_get_fn(mod, fn_name);
+            if (!sym) {
+                throw std::runtime_error("Native module '" + mod.name +
+                                         "' missing symbol hog_fn_" + fn_name);
+            }
+            HogFn fn = reinterpret_cast<HogFn>(sym);
+            builtins[fn_name] = [this, fn](Node* args) -> Value {
+                std::vector<Value> arg_vals;
+                if (args) {
+                    arg_vals.reserve(args->children.size());
+                    for (Node* a : args->children) arg_vals.push_back(eval(a));
+                }
+                NativeBridge bridge;
+                bridge.args = &arg_vals;
+                HogContext ctx = make_hog_ctx(bridge);
+                fn(&ctx);
+                if (bridge.building_map) return Value::make_map(bridge.map_pairs);
+                if (!bridge.result_set) return Value::make_void();
+                return bridge.result;
+            };
+            // Mirror in the typecheck registry so future typechecks see it too.
+            register_builtin_type(fn_name, "auto", {"auto"});
+        }
     }
 
     void exec_program(Node* node) {
@@ -1273,25 +1469,45 @@ private:
 
     Value eval_trade_action(Node* node) {
         Node* args = node->children.empty() ? nullptr : node->children[0];
-        std::cout << "[" << node->value << "(";
-        if (args) for (size_t i = 0; i < args->children.size(); i++) {
-            if (i) std::cout << ", ";
-            std::cout << eval(args->children[i]).to_string();
+        std::vector<Value> arg_vals;
+        if (args) for (Node* a : args->children) arg_vals.push_back(eval(a));
+        // Structured signal line: "SIGNAL <action> <index> [extras...]"
+        // If no args, default the index to the current per-bar index.
+        std::cout << "SIGNAL " << node->value;
+        if (arg_vals.empty() && current_bar_index >= 0) {
+            std::cout << " " << current_bar_index;
+        } else {
+            for (auto& v : arg_vals) std::cout << " " << v.to_string();
         }
-        std::cout << ")]\n";
+        std::cout << "\n";
         return Value::make_void();
     }
 
     Value eval_signal(Node* node) {
         Node* args = node->children.empty() ? nullptr : node->children[0];
+        std::vector<Value> arg_vals;
+        if (args) for (Node* a : args->children) arg_vals.push_back(eval(a));
+
+        // signal_line(name, index, value) — series the chart renders as an
+        // overlay line. Emits "LINE <name> <index> <value>".
+        if (node->value == "signal_line" && arg_vals.size() >= 3) {
+            std::cout << "LINE " << arg_vals[0].to_string()
+                      << " " << arg_vals[1].to_string()
+                      << " " << arg_vals[2].to_string() << "\n";
+            return Value::make_double(0.0);
+        }
+
+        // Default: debug print for signal_int/string/bool (and any malformed
+        // signal_line call so the user sees the bad args).
         std::cout << "[" << node->value << "(";
-        if (args) for (size_t i = 0; i < args->children.size(); i++) {
+        for (size_t i = 0; i < arg_vals.size(); i++) {
             if (i) std::cout << ", ";
-            std::cout << eval(args->children[i]).to_string();
+            std::cout << arg_vals[i].to_string();
         }
         std::cout << ")]\n";
         if (node->value == "signal_int") return Value::make_int(0);
         if (node->value == "signal_bool") return Value::make_bool(false);
+        if (node->value == "signal_line") return Value::make_double(0.0);
         return Value::make_string("");
     }
     
@@ -1337,6 +1553,93 @@ public:
         for (auto& [name, _] : trades) names.push_back(name);
         return names;
     }
+
+    // Run a named trade block once per bar. Each call sees the OHLCV truncated
+    // to indices [0..i] inclusive — past and current data, never future.
+    // The trade body executes in a fresh scope per bar (locals don't leak),
+    // but variables declared at the .hog file's TOP LEVEL persist across bars
+    // so users can carry state forward (e.g. `bool prev_above;`).
+    // buy()/sell() with no args record the current bar as the signal index.
+    void run_with_trade_ohlcv(Node* ast, const std::string& dir,
+                              const std::string& trade_name,
+                              const std::vector<double>& open_v,
+                              const std::vector<double>& high_v,
+                              const std::vector<double>& low_v,
+                              const std::vector<double>& close_v,
+                              const std::vector<double>& volume_v) {
+        source_dir = dir;
+        init_builtins();
+
+        // Inline exec_program's logic, but keep the program scope alive for
+        // the per-bar loop so top-level vars survive between bars.
+        push_scope();
+        for (Node* c : ast->children) {
+            if (c->type == "func_decl") functions[c->value] = FuncDef{c};
+            else if (c->type == "trade_block" || c->type == "metric_block")
+                trades[c->value] = c;
+            else if (c->type == "export" && !c->children.empty()) {
+                Node* inner = c->children[0];
+                if (inner->type == "func_decl")
+                    functions[inner->value] = FuncDef{inner};
+                else if (inner->type == "class_decl")
+                    exec_class_decl(inner);
+                else if (inner->type == "trade_block" || inner->type == "metric_block")
+                    trades[inner->value] = inner;
+            }
+        }
+        for (Node* c : ast->children) exec(c);
+
+        auto it = trades.find(trade_name);
+        if (it == trades.end())
+            throw std::runtime_error("Runtime error: no trade block named '" + trade_name + "'");
+
+        Node* trade_node = it->second;
+        Node* body = nullptr;
+        for (Node* c : trade_node->children)
+            if (c->type == "block") body = c;
+
+        // Shared growing vectors — each iteration appends one element and the
+        // Values set in scope reference the same shared_ptr, so close.size()
+        // reflects the current bar index + 1.
+        Value open_val   = Value::make_list({});
+        Value high_val   = Value::make_list({});
+        Value low_val    = Value::make_list({});
+        Value close_val  = Value::make_list({});
+        Value volume_val = Value::make_list({});
+        // Pre-reserve to avoid reallocation invalidating shared_ptr access.
+        const size_t cap = std::max({open_v.size(), high_v.size(), low_v.size(),
+                                     close_v.size(), volume_v.size()});
+        open_val.elems->reserve(cap);
+        high_val.elems->reserve(cap);
+        low_val.elems->reserve(cap);
+        close_val.elems->reserve(cap);
+        volume_val.elems->reserve(cap);
+
+        const int n = (int)close_v.size();
+        for (int i = 0; i < n; i++) {
+            open_val.elems->push_back(Value::make_double(i < (int)open_v.size()   ? open_v[i]   : 0.0));
+            high_val.elems->push_back(Value::make_double(i < (int)high_v.size()   ? high_v[i]   : 0.0));
+            low_val.elems->push_back(Value::make_double(i < (int)low_v.size()    ? low_v[i]    : 0.0));
+            close_val.elems->push_back(Value::make_double(i < (int)close_v.size()  ? close_v[i]  : 0.0));
+            volume_val.elems->push_back(Value::make_double(i < (int)volume_v.size() ? volume_v[i] : 0.0));
+
+            current_bar_index = i;
+            push_scope();
+            set_var("open",   open_val);
+            set_var("high",   high_val);
+            set_var("low",    low_val);
+            set_var("close",  close_val);
+            set_var("volume", volume_val);
+            set_var("index",  Value::make_int(i));
+
+            try {
+                if (body) for (Node* s : body->children) exec(s);
+            } catch (ReturnException&) {}
+            pop_scope();
+        }
+        current_bar_index = -1;
+        pop_scope();  // program scope
+    }
 };
 
 // Register builtin type signatures (callable before interpretation for typechecking)
@@ -1344,10 +1647,27 @@ void register_builtin_types() {
     register_builtin_type("print", "void", {"auto"});
     register_builtin_type("time",  "int",  {});
     register_builtin_type("chrono", "int", {});
+    register_builtin_type("pow", "double", {"double", "double"});
+    register_builtin_type("sqrt", "double", {"double"});
+    register_builtin_type("abs", "double", {"double"});
+    // log accepts 1 or 2 args, so register as variadic auto.
+    register_builtin_type("log", "double", {"auto"});
 }
 
 // ── Entry point ─────────────────────────────────────────────────────────────
 void interpret(Node* ast, const std::string& source_dir) {
     Interpreter interp;
     interp.run(ast, source_dir);
+}
+
+void interpret_trade_with_ohlcv(Node* ast, const std::string& source_dir,
+                                 const std::string& trade_name,
+                                 const std::vector<double>& open_v,
+                                 const std::vector<double>& high_v,
+                                 const std::vector<double>& low_v,
+                                 const std::vector<double>& close_v,
+                                 const std::vector<double>& volume_v) {
+    Interpreter interp;
+    interp.run_with_trade_ohlcv(ast, source_dir, trade_name,
+                                open_v, high_v, low_v, close_v, volume_v);
 }

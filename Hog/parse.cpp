@@ -192,6 +192,7 @@ private:
         if (tok->type == "keyword" && tok->value == "continue") return parse_continue();
         if (tok->type == "keyword" && tok->value == "trade")  return parse_trade();
         if (tok->type == "keyword" && tok->value == "metric") return parse_metric();
+        if (tok->type == "keyword" && tok->value == "parameter") return parse_parameter();
         if (looking_at_declaration()) return parse_declaration();
         return parse_expr_stmt();
     }
@@ -201,6 +202,16 @@ private:
     Node* parse_import() {
         int ln = cur_line(), cl = cur_col();
         advance(); // consume "import"
+
+        // `import cpp <name>;` — load a native (.cpp) module from User_Creations.
+        if (check("keyword", "cpp")) {
+            advance(); // consume "cpp"
+            Node* name = expect_any("identifier", "keyword");
+            Node* node = make_at("import_cpp", name->value, ln, cl);
+            expect("delimiter", ";");
+            return node;
+        }
+
         std::string path;
         Node* name = expect_any("identifier", "keyword");
         path += name->value;
@@ -349,6 +360,21 @@ private:
             params->add_child(make_at("trade_param", next->value, next->line, next->col));
         }
         return params;
+    }
+
+    // parameter <type> <name> = <main_value>;
+    // Parsed as parameter_decl: value=name, children=[type, init_expr]
+    Node* parse_parameter() {
+        int ln = cur_line(), cl = cur_col();
+        advance(); // consume "parameter"
+        Node* type = parse_type();
+        Node* name = expect_any("identifier", "keyword");
+        Node* node = make_at("parameter_decl", name->value, ln, cl);
+        node->add_child(type);
+        expect("operator", "=");
+        node->add_child(parse_expr());
+        expect("delimiter", ";");
+        return node;
     }
 
     Node* parse_metric() {
@@ -770,7 +796,7 @@ private:
         // signal calls
         if (tok->type == "keyword"
             && (tok->value == "signal_int" || tok->value == "signal_string"
-                || tok->value == "signal_bool")) {
+                || tok->value == "signal_bool" || tok->value == "signal_line")) {
             int ln = tok->line, cl = tok->col;
             std::string sig = tok->value;
             advance();

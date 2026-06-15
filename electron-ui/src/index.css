@@ -1,0 +1,86 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: #1f1f1f;
+  color: #d4d4d4;
+  font-size: 13px;
+  letter-spacing: 0.01em;
+}
+
+/* Scrollbars — slim, Unity-style */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: #232323;
+}
+::-webkit-scrollbar-thumb {
+  background: #4a4a4a;
+  border: 2px solid #232323;
+  border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #5a5a5a;
+}
+::-webkit-scrollbar-corner {
+  background: #232323;
+}
+
+/* Focus — amber ring on text inputs only; buttons stay flat so a click
+   doesn't leave a lingering halo. Keyboard users still get :focus-visible
+   on buttons via the rule below. */
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  box-shadow: 0 0 0 1px rgba(184, 134, 11, 0.65);
+}
+
+button {
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+}
+button:focus,
+button:focus-visible,
+button::-moz-focus-inner {
+  outline: none;
+  border: 0;
+}
+
+/* Subtle button hover */
+button {
+  transition: background 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
+}
+
+select {
+  -webkit-appearance: none;
+  appearance: none;
+  /* Custom rotating chevron is rendered by the Dropdown component itself,
+     so we strip the native control's arrow here. */
+}
+
+/* Date input chrome */
+input[type='date']::-webkit-calendar-picker-indicator {
+  filter: invert(0.7);
+  cursor: pointer;
+  opacity: 0.7;
+}
+input[type='date']::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+}
+
+::selection {
+  background: rgba(184, 134, 11, 0.45);
+  color: #fcfcfa;
+}

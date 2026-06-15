@@ -13,11 +13,11 @@ static const std::unordered_set<std::string> KEYWORDS = {
     // control flow
     "if", "else", "for", "while", "break", "continue", "return",
     // special constructs
-    "trade", "metric",
+    "trade", "metric", "parameter",
     // trading actions
     "buy", "sell",
     // signals
-    "signal_int", "signal_string", "signal_bool",
+    "signal_int", "signal_string", "signal_bool", "signal_line",
     // imports / exports
     "import", "from", "export",
     // user-defined types

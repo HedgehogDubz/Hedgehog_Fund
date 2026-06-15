@@ -15,3 +15,13 @@ data/
 # IDE
 .idea/
 .vscode/
+
+# Node / Electron build artifacts
+electron-ui/node_modules/
+electron-ui/dist/
+
+# Hog runtime caches (compiled .dylibs from `import cpp`)
+User_Creations/.hog_cache/
+
+# Playwright cache (created by browser_navigate during debugging)
+.playwright-mcp/

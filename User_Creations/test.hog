@@ -1,9 +1,59 @@
-import math;
+// Per-bar trade model.
+//
+// The runtime calls each `trade` block once for every bar in the dataset.
+// On call number `index`, `close`, `open`, etc. are List<double>s of length
+// index+1 containing only the data up to and including the current bar —
+// never any future bars.
+//
+// Implicit variables inside a trade block:
+//   index   — current bar (0-based)
+//   close, open, high, low, volume — List<double> of length index+1
+//
+// `buy()` / `sell()` with no args record the current bar as the signal.
+// `return;` early-exits the current bar.
 
+import cpp indicators;
 
+bool prev_above;
+trade rolling_ma_trade() {
+    parameter int window = 20;
 
-double a = math.pi;
-trade rolling_ma(){
-    a+=5;
-    print(a);
+    if (index < window) {
+        return;
+    }
+
+    List<double> ma = rolling_ma(close, window);
+    signal_line("ma", index, ma[index]);
+
+    bool now_above  = close[index]   > ma[index];
+    if (now_above && !prev_above) {
+        buy();
+    } else if (!now_above && prev_above) {
+        sell();
+    }
+    prev_above = now_above;
+}
+
+trade rolling_ma_crossover_trade() {
+    parameter int fast = 10;
+    parameter int slow = 30;
+
+    if (index < slow) {
+        return;
+    }
+
+    Map result = rolling_ma_crossover(close, fast, slow);
+    List<double> fast_ma = result.get("fast");
+    List<double> slow_ma = result.get("slow");
+
+    signal_line("fast", index, fast_ma[index]);
+    signal_line("slow", index, slow_ma[index]);
+
+    double diff      = fast_ma[index]   - slow_ma[index];
+    double prev_diff = fast_ma[index-1] - slow_ma[index-1];
+    if (diff > 0.0 && prev_diff <= 0.0) {
+        buy();
+    } else if (diff < 0.0 && prev_diff >= 0.0) {
+        sell();
+    }
 }

@@ -199,7 +199,7 @@ private:
         const std::string& t = node->type;
 
         if (t == "program")        check_program(node);
-        else if (t == "var_decl")  check_var_decl(node);
+        else if (t == "var_decl" || t == "parameter_decl") check_var_decl(node);
         else if (t == "func_decl") check_func_decl(node);
         else if (t == "export")    check_export(node);
         else if (t == "class_decl" || t == "struct_decl") check_class(node);
@@ -211,7 +211,48 @@ private:
         else if (t == "trade_block" || t == "metric_block") check_trade_block(node);
         else if (t == "import")      check_import(node);
         else if (t == "from_import") check_from_import(node);
+        else if (t == "import_cpp")  check_import_cpp(node);
         else { infer(node); }
+    }
+
+    // Register exported names from a native .cpp module so calls type-check.
+    // We don't compile here — just scan the source for HOG_EXPORTS({ ... }).
+    void check_import_cpp(Node* node) {
+        std::string cpp_path = source_dir + "/" + node->value + ".cpp";
+        std::ifstream f(cpp_path);
+        if (!f.is_open()) {
+            error(node, "native module not found: " + cpp_path);
+            return;
+        }
+        std::ostringstream buf; buf << f.rdbuf();
+        const std::string content = buf.str();
+
+        size_t pos = content.find("HOG_EXPORTS");
+        if (pos == std::string::npos) {
+            error(node, "native module '" + node->value + "' has no HOG_EXPORTS(...) macro");
+            return;
+        }
+        size_t lbrace = content.find('{', pos);
+        size_t rbrace = content.find('}', lbrace);
+        if (lbrace == std::string::npos || rbrace == std::string::npos) {
+            error(node, "malformed HOG_EXPORTS in '" + node->value + "'");
+            return;
+        }
+
+        std::string inner = content.substr(lbrace + 1, rbrace - lbrace - 1);
+        size_t i = 0;
+        while (i < inner.size()) {
+            size_t q1 = inner.find('"', i);
+            if (q1 == std::string::npos) break;
+            size_t q2 = inner.find('"', q1 + 1);
+            if (q2 == std::string::npos) break;
+            std::string name = inner.substr(q1 + 1, q2 - q1 - 1);
+            if (!name.empty()) {
+                // Variadic auto: any args allowed, any return.
+                register_builtin_type(name, "auto", {"auto"});
+            }
+            i = q2 + 1;
+        }
     }
 
     void check_export(Node* node) {
@@ -386,6 +427,17 @@ private:
 
     void check_trade_block(Node* node) {
         push_scope();
+        // Trade bodies are invoked per bar — bare `return;` is allowed to skip
+        // the rest of the bar's logic.
+        std::string prev_return = current_return_type;
+        current_return_type = "void";
+        // Implicit OHLCV bound by the runtime when a trade is invoked over data.
+        declare(node, "open",   "List<double>");
+        declare(node, "high",   "List<double>");
+        declare(node, "low",    "List<double>");
+        declare(node, "close",  "List<double>");
+        declare(node, "volume", "List<double>");
+        declare(node, "index",  "int");
         // Declare trade parameters as auto-typed variables
         for (Node* child : node->children) {
             if (child->type == "trade_params") {
@@ -398,6 +450,7 @@ private:
             if (child->type != "trade_params")
                 check_node(child);
         }
+        current_return_type = prev_return;
         pop_scope();
     }
 
@@ -428,6 +481,7 @@ private:
             if (node->value == "signal_int")    return "int";
             if (node->value == "signal_string") return "string";
             if (node->value == "signal_bool")   return "bool";
+            if (node->value == "signal_line")   return "double";
             return "auto";
         }
         return "";
